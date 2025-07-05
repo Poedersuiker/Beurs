@@ -1,0 +1,2 @@
+# This file is to ensure the db/ directory is created and tracked by git,
+# even if it's empty initially. The SQLite database will be created here.

@@ -1,0 +1,25 @@
+# This file will be populated in the next step.
+# It will contain example configuration variables.
+# Rename this file to config.py and fill in your actual values for deployment.
+
+# Flask specific configs
+SECRET_KEY = "your_default_secret_key_here_change_me"  # IMPORTANT: Change this for production!
+DEBUG = True # Set to False in production
+
+# Database Configuration
+DB_TYPE = "sqlite"  # Options: "sqlite", "mariadb"
+
+# SQLite Configuration (used if DB_TYPE is "sqlite")
+SQLITE_DB_NAME = "app.db"  # This will be created in the 'db/' directory
+
+# MariaDB/MySQL Configuration (used if DB_TYPE is "mariadb")
+MARIADB_USER = "your_mariadb_user"
+MARIADB_PASSWORD = "your_mariadb_password"
+MARIADB_HOST = "localhost" # Or your DB host
+MARIADB_DB_NAME = "your_mariadb_database_name"
+
+# SQLAlchemy specific configs
+SQLALCHEMY_TRACK_MODIFICATIONS = False # Recommended to set to False to save resources
+
+# This will be constructed in app/__init__.py based on DB_TYPE
+# SQLALCHEMY_DATABASE_URI = ""

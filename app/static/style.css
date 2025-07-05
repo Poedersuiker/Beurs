@@ -1,0 +1,25 @@
+/* This file can be used for CSS styles later if needed. */
+body {
+    font-family: sans-serif;
+    margin: 20px;
+}
+
+nav ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+nav ul li {
+    display: inline;
+    margin-right: 15px;
+}
+
+nav ul li a {
+    text-decoration: none;
+    color: blue;
+}
+
+nav ul li a.active {
+    font-weight: bold;
+    color: black;
+}

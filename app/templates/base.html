@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}My Flask App{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+    <header>
+        <h1>My Flask Application</h1>
+        <nav>
+            <ul>
+                <li><a href="{{ url_for('main.home') }}" class="{{ 'active' if active_tab == 'home' else '' }}">Home</a></li>
+                <li><a href="{{ url_for('main.admin') }}" class="{{ 'active' if active_tab == 'admin' else '' }}">Admin</a></li>
+            </ul>
+        </nav>
+    </header>
+    <hr>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <hr>
+    <footer>
+        <p>&copy; 2024 My Flask App</p>
+    </footer>
+</body>
+</html>
