@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, current_app, url_for, request
 # from .models import User # Example: Import models if you need to query the DB in your routes
-# from . import db # Example: Import db instance if you need to commit changes
+from . import db # Example: Import db instance if you need to commit changes
+from sqlalchemy.exc import SQLAlchemyError # Import SQLAlchemyError for exception handling
 
 # Using a Blueprint to organize routes.
 # 'main' is the name of the blueprint. This will be used when generating URLs e.g. url_for('main.home')
@@ -20,7 +21,13 @@ def admin():
     # Example of accessing config:
     # secret_key = current_app.config.get('SECRET_KEY')
     # print(f"Admin page accessed. Secret key starts with: {secret_key[:5] if secret_key else 'Not Set'}")
-    return render_template('admin.html')
+    try:
+        # Attempt to execute a simple query to check the database connection.
+        db.session.execute('SELECT 1')
+        db_connection_status = "Successfully connected to the database."
+    except SQLAlchemyError as e:
+        db_connection_status = f"Failed to connect to the database: {e}"
+    return render_template('admin.html', db_connection_status=db_connection_status)
 
 # Example of a route that interacts with the database:
 # @main_bp.route('/add_user/<username>/<email>')

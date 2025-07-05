@@ -1,4 +1,4 @@
 Flask
 Flask-SQLAlchemy
 python-dotenv
-mysqlclient (Uncomment if you plan to use MariaDB/MySQL and install it)
+# mysqlclient (Uncomment if you plan to use MariaDB/MySQL and install it)
