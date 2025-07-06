@@ -1,10 +1,10 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import inspect
 from sqlalchemy.exc import OperationalError
 import os
 
 # Attempt to import the configuration.
 # In a real deployment, config.py would be generated from config.py.example.
+# This needs to be available for get_db_uri() which might be called early.
 try:
     import config
 except ImportError:
@@ -13,7 +13,7 @@ except ImportError:
     # Define default fallbacks if config.py is missing
     class DefaultConfig:
         DB_BACKEND = "sqlite"
-        SQLITE_DB_NAME = "default_app.db"
+        SQLITE_DB_NAME = "default_app.db" # Should match the example for consistency
         MARIADB_USER = ""
         MARIADB_PASSWORD = ""
         MARIADB_HOST = ""
@@ -59,14 +59,25 @@ class DailyPrice(Base):
 engine = None
 SessionLocal = None
 
+
 def get_db_uri():
     """
     Constructs the database URI based on the configuration.
+    This function is used by app.py to set SQLALCHEMY_DATABASE_URI.
     """
+    # Ensure config is loaded if it was defaulted (e.g., if this module is imported before app fully sets up)
+    # However, standard import should handle this. The primary concern is that `config` module is correct.
+    # If DefaultConfig was used, config object is already set.
+
+    # Determine the base directory for SQLite path (project root)
+    # __file__ in database.py refers to the location of database.py
+    # If app.py is in root and database.py is in root, then os.path.dirname(os.path.abspath(__file__)) is root.
+    # If SQLITE_DB_NAME is 'app.db', it becomes '<project_root>/app.db'
+    project_root = os.path.dirname(os.path.abspath(__file__)) # Assumes database.py is in project root
+
     if config.DB_BACKEND == "sqlite":
         # For SQLite, the path is relative to the project root or an absolute path.
-        # If SQLITE_DB_NAME is just a filename, it will be in the current working directory.
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.SQLITE_DB_NAME)
+        db_path = os.path.join(project_root, config.SQLITE_DB_NAME)
         return f"sqlite:///{db_path}"
     elif config.DB_BACKEND == "mariadb":
         if not all([config.MARIADB_USER, config.MARIADB_PASSWORD, config.MARIADB_HOST, config.MARIADB_DB_NAME]):
@@ -78,63 +89,60 @@ def get_db_uri():
     else:
         raise ValueError(f"Unsupported DB_BACKEND: {config.DB_BACKEND}. Choose 'sqlite' or 'mariadb'.")
 
-def init_db():
+
+def get_db_status_and_tables(db_instance):
     """
-    Initializes the database engine and session.
-    This function should be called once when the application starts.
-    """
-    global engine, SessionLocal
-
-    db_uri = get_db_uri()
-
-    try:
-        if config.DB_BACKEND == "sqlite":
-            # For SQLite, connect_args is used to ensure foreign key constraints are enabled.
-            engine = create_engine(db_uri, connect_args={"check_same_thread": False})
-        else:
-            # For MariaDB (and other remote databases), connection pooling is generally desired.
-            engine = create_engine(db_uri, pool_pre_ping=True)
-
-        # Test the connection
-        with engine.connect() as connection:
-            pass # Connection successful if no exception
-        print(f"Successfully connected to {config.DB_BACKEND} database.")
-
-    except OperationalError as e:
-        print(f"Error connecting to the database: {e}")
-        print(f"Database URI used: {db_uri.replace(config.MARIADB_PASSWORD, '********') if config.DB_BACKEND == 'mariadb' else db_uri}")
-        raise
-    except ValueError as e:
-        print(f"Configuration error: {e}")
-        raise
-
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    print("Database engine and session initialized.")
-
-def get_db_status_and_tables():
-    """
-    Checks database connectivity and retrieves a list of table names.
+    Checks database connectivity and retrieves a list of table names using Flask-SQLAlchemy instance.
     Returns a dictionary with 'status' and 'tables' (or 'error_message').
+    'db_instance' is the SQLAlchemy object from Flask-SQLAlchemy (app.db).
     """
-    global engine
-    if not engine:
-        try:
-            # Attempt to initialize if not already done.
-            # This is a fallback, proper initialization should happen at app start.
-            print("WARN: Engine not initialized. Attempting to init_db() from get_db_status_and_tables.")
-            init_db()
-        except Exception as e:
-            return {"status": "Error", "error_message": f"Failed to initialize database: {str(e)}", "tables": []}
+    if not db_instance or not db_instance.engine:
+        return {"status": "Error", "error_message": "Flask-SQLAlchemy db object not available or engine not initialized.", "tables": []}
+
+    current_config_backend = "Unknown"
+    try:
+        # Try to get the backend from the live engine, or fall back to config
+        # This is a bit indirect; usually, we'd just trust the engine is configured correctly.
+        if db_instance.engine.name == 'sqlite':
+            current_config_backend = "sqlite"
+        elif db_instance.engine.name == 'mysql': # PyMySQL driver makes engine name 'mysql'
+            current_config_backend = "mariadb (or mysql)"
+        else:
+            current_config_backend = db_instance.engine.name
+    except Exception: # If engine access fails for some reason
+        pass
+
 
     try:
-        with engine.connect() as connection:
-            # Connection successful
-            from sqlalchemy import inspect
-            inspector = inspect(engine)
+        # Flask-SQLAlchemy's engine is available via db_instance.engine
+        with db_instance.engine.connect() as connection:
+            inspector = inspect(db_instance.engine)
             table_names = inspector.get_table_names()
-            return {"status": f"Connected to {config.DB_BACKEND}", "tables": table_names, "error_message": None}
+            # Try to determine backend from config for display, as engine might not be fully initialized
+            # if there was an issue earlier.
+            try:
+                # Re-access config to display what backend it *thinks* it's using
+                # This is mainly for the status message.
+                cfg_backend_display = config.DB_BACKEND
+            except Exception:
+                cfg_backend_display = current_config_backend # fallback
+
+            return {"status": f"Connected to {cfg_backend_display}", "tables": table_names, "error_message": None}
     except OperationalError as e:
-        return {"status": "Error", "error_message": f"Failed to connect to database: {str(e)}", "tables": []}
+        # Try to get password from config to redact if it's a MariaDB connection error
+        db_uri_display = "URI not available"
+        try:
+            db_uri_for_error = get_db_uri() # Construct it again for error display
+            if config.DB_BACKEND == 'mariadb' and hasattr(config, 'MARIADB_PASSWORD'):
+                db_uri_display = db_uri_for_error.replace(config.MARIADB_PASSWORD, '********')
+            else:
+                db_uri_display = db_uri_for_error
+        except Exception:
+            pass # Keep "URI not available"
+
+        return {"status": "Error",
+                "error_message": f"Failed to connect to database ({config.DB_BACKEND} backend). URI: {db_uri_display}. Error: {str(e)}",
+                "tables": []}
     except Exception as e: # Catch any other unexpected errors
         return {"status": "Error", "error_message": f"An unexpected error occurred: {str(e)}", "tables": []}
 
@@ -259,3 +267,7 @@ if __name__ == "__main__":
             else:
                 print(f"WARN: Temporary config.py was used, but SQLITE_DB_NAME was not 'example_app.db'. "
                       f"Not removing {config.SQLITE_DB_NAME}.")
+
+# The old if __name__ == "__main__": block is removed as it's no longer relevant
+# for initializing or testing this version of database.py.
+# Flask-SQLAlchemy handles initialization, and testing would be done through the app.
