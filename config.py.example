@@ -1,0 +1,18 @@
+# Database Configuration
+
+# Choose your database backend: "sqlite" or "mariadb"
+DB_BACKEND = "sqlite"  # Default to SQLite
+
+# SQLite Configuration (only used if DB_BACKEND is "sqlite")
+# The database will be created in the project's root directory if a relative path is given.
+SQLITE_DB_NAME = "app.db"
+
+# MariaDB Configuration (only used if DB_BACKEND is "mariadb")
+MARIADB_USER = "your_mariadb_user"
+MARIADB_PASSWORD = "your_mariadb_password"
+MARIADB_HOST = "localhost"
+MARIADB_PORT = 3306  # Default MariaDB port
+MARIADB_DB_NAME = "your_mariadb_database"
+
+# Example of how to construct the SQLAlchemy database URI for MariaDB
+# MARIADB_DATABASE_URI = f"mysql+pymysql://{MARIADB_USER}:{MARIADB_PASSWORD}@{MARIADB_HOST}:{MARIADB_PORT}/{MARIADB_DB_NAME}"
