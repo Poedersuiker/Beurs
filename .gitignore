@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Configuration files that may contain secrets
+config.py
+
+# Environment
+.env
+venv/
+ENV/
+
+# IDE and editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

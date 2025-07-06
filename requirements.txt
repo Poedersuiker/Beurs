@@ -1,0 +1,4 @@
+SQLAlchemy>=1.4
+PyMySQL>=1.0
+mariadb>=1.0 # For the MariaDB C connector, if needed directly or by other tools
+# Add other project dependencies below
