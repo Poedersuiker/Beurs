@@ -24,6 +24,37 @@ except ImportError:
 # Define the SQLAlchemy base for declarative models
 Base = declarative_base()
 
+# Import necessary types for defining models
+from sqlalchemy import Column, Integer, String, Text, REAL, Date, ForeignKey
+from sqlalchemy.orm import relationship
+
+class Security(Base):
+    __tablename__ = "securities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(Text, nullable=False, unique=True)
+    name = Column(Text)
+    type = Column(Text)
+    exchange = Column(Text)
+    currency = Column(Text)
+
+    daily_prices = relationship("DailyPrice", back_populates="security")
+
+class DailyPrice(Base):
+    __tablename__ = "daily_prices"
+
+    security_id = Column(Integer, ForeignKey("securities.id"), primary_key=True)
+    date = Column(Date, primary_key=True)
+    open = Column(REAL)
+    high = Column(REAL)
+    low = Column(REAL)
+    close = Column(REAL)
+    adj_close = Column(REAL)
+    volume = Column(Integer)
+
+    security = relationship("Security", back_populates="daily_prices")
+
+
 # Global engine and session variables
 engine = None
 SessionLocal = None
@@ -122,11 +153,17 @@ def get_db():
         db.close()
 
 # Example of how to create tables (optional, can be managed by Alembic or similar tools)
-# def create_tables():
-#     if not engine:
-#         raise RuntimeError("Database not initialized. Call init_db() first.")
-#     Base.metadata.create_all(bind=engine)
-#     print("Tables created (if they didn't exist).")
+def create_tables():
+    if not engine:
+        # Attempt to initialize if not already done, useful for standalone script usage
+        print("WARN: Engine not initialized in create_tables. Attempting to init_db().")
+        try:
+            init_db()
+        except Exception as e:
+            print(f"Failed to initialize database in create_tables: {e}")
+            raise RuntimeError("Database not initialized. Call init_db() first.") from e
+    Base.metadata.create_all(bind=engine)
+    print("Tables created (if they didn't exist).")
 
 if __name__ == "__main__":
     # This is an example of how to initialize and use the database setup.
@@ -179,15 +216,46 @@ if __name__ == "__main__":
         # print(f"Retrieved item: {retrieved_item.name}")
         # db_session.close()
 
+        # Create the tables defined in this file
+        print("Attempting to create tables...")
+        create_tables()
+        print("Finished create_tables().")
+
+        # Verify tables by listing them
+        status_info = get_db_status_and_tables()
+        if status_info["error_message"]:
+            print(f"Error checking table status: {status_info['error_message']}")
+        else:
+            print(f"Database status: {status_info['status']}")
+            print(f"Tables found: {status_info['tables']}")
+            if "securities" in status_info["tables"] and "daily_prices" in status_info["tables"]:
+                print("Successfully created 'securities' and 'daily_prices' tables.")
+            else:
+                print("ERROR: 'securities' or 'daily_prices' or both tables not found after creation attempt.")
+
+
     except Exception as e:
         print(f"An error occurred during database initialization or example usage: {e}")
 
     finally:
         # Clean up the dummy config.py if it was created
-        if os.path.exists("config.py") and "example_app.db" in open("config.py").read():
-             if config.SQLITE_DB_NAME == "example_app.db" : #be careful
+        # Also clean up the dummy database file if it was created and is the default example one
+        db_file_to_remove = None
+        if os.path.exists("config.py"):
+            # Read the config to check which db file was used if it was sqlite
+            temp_config_lines = open("config.py").read()
+            if "DB_BACKEND = \"sqlite\"" in temp_config_lines and \
+               "SQLITE_DB_NAME = \"example_app.db\"" in temp_config_lines:
+                db_file_to_remove = "example_app.db"
                 os.remove("config.py")
                 print("Temporary config.py removed.")
-        if os.path.exists("example_app.db"):
-            os.remove("example_app.db")
-            print("Temporary example_app.db removed.")
+
+        if db_file_to_remove and os.path.exists(db_file_to_remove):
+            # Special check to avoid deleting a user's actual database if they changed SQLITE_DB_NAME
+            # in the temporary config.py to something other than example_app.db
+            if config.DB_BACKEND == "sqlite" and config.SQLITE_DB_NAME == "example_app.db":
+                 os.remove(db_file_to_remove)
+                 print(f"Temporary {db_file_to_remove} removed.")
+            else:
+                print(f"WARN: Temporary config.py was used, but SQLITE_DB_NAME was not 'example_app.db'. "
+                      f"Not removing {config.SQLITE_DB_NAME}.")
