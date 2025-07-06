@@ -80,6 +80,33 @@ def init_db():
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     print("Database engine and session initialized.")
 
+def get_db_status_and_tables():
+    """
+    Checks database connectivity and retrieves a list of table names.
+    Returns a dictionary with 'status' and 'tables' (or 'error_message').
+    """
+    global engine
+    if not engine:
+        try:
+            # Attempt to initialize if not already done.
+            # This is a fallback, proper initialization should happen at app start.
+            print("WARN: Engine not initialized. Attempting to init_db() from get_db_status_and_tables.")
+            init_db()
+        except Exception as e:
+            return {"status": "Error", "error_message": f"Failed to initialize database: {str(e)}", "tables": []}
+
+    try:
+        with engine.connect() as connection:
+            # Connection successful
+            from sqlalchemy import inspect
+            inspector = inspect(engine)
+            table_names = inspector.get_table_names()
+            return {"status": f"Connected to {config.DB_BACKEND}", "tables": table_names, "error_message": None}
+    except OperationalError as e:
+        return {"status": "Error", "error_message": f"Failed to connect to database: {str(e)}", "tables": []}
+    except Exception as e: # Catch any other unexpected errors
+        return {"status": "Error", "error_message": f"An unexpected error occurred: {str(e)}", "tables": []}
+
 def get_db():
     """
     Dependency to get a database session.

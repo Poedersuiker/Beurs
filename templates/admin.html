@@ -14,6 +14,29 @@
     </nav>
     <div class="container">
         <h1>Admin Page</h1>
+
+        <h2>Database Status</h2>
+        {% if db_status %}
+            <p><strong>Status:</strong> {{ db_status.status }}</p>
+            {% if db_status.error_message %}
+                <p style="color: red;"><strong>Error:</strong> {{ db_status.error_message }}</p>
+            {% endif %}
+
+            {% if db_status.tables is not none %}
+                <h3>Tables:</h3>
+                {% if db_status.tables %}
+                    <ul>
+                        {% for table_name in db_status.tables %}
+                            <li>{{ table_name }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p>No tables found in the database.</p>
+                {% endif %}
+            {% endif %}
+        {% else %}
+            <p>Database status information is unavailable.</p>
+        {% endif %}
     </div>
 </body>
 </html>
