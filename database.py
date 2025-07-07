@@ -1,5 +1,6 @@
 from sqlalchemy import inspect
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.declarative import declarative_base
 import os
 
 # Attempt to import the configuration.
