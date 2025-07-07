@@ -1,4 +1,4 @@
-from flask import Flask, render_template, current_app, redirect, url_for, request, flash, g, jsonify
+from flask import Flask, render_template, current_app, redirect, url_for, request, flash, g, jsonify, Response
 from flask.globals import request_ctx
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate, upgrade
@@ -16,6 +16,8 @@ import time
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_secret_key') # Needed for flash messages
 
+import json # For serializing data for SSE
+
 # Global variable to store import status
 import_status = {
     'running': False,
@@ -23,7 +25,8 @@ import_status = {
     'progress': 0, # Overall progress percentage
     'current_task': '', # E.g., "Fetching AAPL", "Processing data"
     'error': False,
-    'log': [] # A list of log messages
+    'log': [], # A list of log messages
+    'last_updated': time.time() # Timestamp for SSE to detect changes
 }
 # Lock for synchronizing access to import_status
 import_status_lock = threading.Lock()
@@ -323,6 +326,7 @@ def _update_import_status(message, current_task_msg, progress_val=None, error_fl
             import_status['running'] = running_flag
         if not import_status['running']: # If process stopped, ensure progress is 100 or 0 if error
             import_status['progress'] = 0 if error_flag else 100
+        import_status['last_updated'] = time.time() # Update timestamp
 
 
 def _import_yahoo_finance_task(app_context, security_id_task, time_period_task):
@@ -429,7 +433,8 @@ def import_yahoo_finance():
             'progress': 0,
             'current_task': 'Starting',
             'error': False,
-            'log': [f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] New import request received."]
+            'log': [f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] New import request received."],
+            'last_updated': time.time()
         })
 
     security_id = request.form.get('security_id')
@@ -458,6 +463,43 @@ def get_import_status():
         # Return a copy to avoid issues if the dict is modified while serializing to JSON
         status_copy = dict(import_status)
     return jsonify(status_copy)
+
+@app.route('/admin/import_status_stream')
+def import_status_stream():
+    def generate_status():
+        last_sent_timestamp = 0
+        try:
+            while True:
+                with import_status_lock:
+                    current_status_timestamp = import_status.get('last_updated', 0)
+                    if current_status_timestamp > last_sent_timestamp:
+                        status_to_send = dict(import_status) # Send a copy
+                        last_sent_timestamp = current_status_timestamp
+                        # SSE format: data: <json_string>\n\n
+                        yield f"data: {json.dumps(status_to_send)}\n\n"
+
+                # Check if the import is still running or just finished/errored.
+                # If not running and we've sent the final state, we can consider closing the stream
+                # or let the client decide to close based on 'running' flag.
+                # For simplicity, we keep it running but send less frequently if idle.
+                with import_status_lock:
+                    is_running = import_status['running']
+
+                if not is_running and last_sent_timestamp == current_status_timestamp :
+                    # If not running and last status sent, check less frequently or send keep-alive
+                    time.sleep(5) # Check less often if idle
+                    yield ": keep-alive\n\n" # Send a comment as a keep-alive
+                else:
+                    time.sleep(0.5) # Poll status more frequently when active or change pending
+        except GeneratorExit:
+            # This occurs when the client disconnects
+            print("SSE client disconnected")
+            # Perform any cleanup if necessary
+        except Exception as e:
+            print(f"Error in SSE stream: {e}")
+
+
+    return Response(generate_status(), mimetype='text/event-stream')
 
 
 @app.cli.command("seed_securities")

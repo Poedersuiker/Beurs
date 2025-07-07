@@ -81,14 +81,16 @@
             const statusProgressElement = document.getElementById('status-progress');
             const progressBarElement = document.getElementById('progress-bar');
             const statusLogElement = document.getElementById('status-log');
-            let pollingInterval;
-            let initialCheckDone = false; // To ensure we check initial state once
 
             function formatLog(logArray) {
-                return logArray.join('\\n');
+                return logArray.join('\n'); // Use '\n' for preformatted text
             }
 
             function updateStatusDisplay(status) {
+                if (!status) {
+                    console.warn("updateStatusDisplay called with null or undefined status.");
+                    return;
+                }
                 statusMessageElement.textContent = status.message || 'N/A';
                 statusTaskElement.textContent = status.current_task || 'N/A';
 
@@ -107,7 +109,6 @@
                      progressBarElement.style.backgroundColor = '#e0e0e0'; // Grey for idle/default
                 }
 
-
                 if (status.log && Array.isArray(status.log)) {
                     statusLogElement.textContent = formatLog(status.log);
                     statusLogElement.scrollTop = statusLogElement.scrollHeight; // Auto-scroll to bottom
@@ -116,61 +117,43 @@
                 }
             }
 
-            function fetchImportStatus() {
-                fetch("{{ url_for('get_import_status') }}")
-                    .then(response => response.json())
-                    .then(status => {
-                        updateStatusDisplay(status);
-                        initialCheckDone = true;
+            // Initialize EventSource
+            const eventSourceUrl = "{{ url_for('import_status_stream') }}";
+            const evtSource = new EventSource(eventSourceUrl);
 
-                        if (status.running) {
-                            if (!pollingInterval) { // Start polling if not already
-                                pollingInterval = setInterval(fetchImportStatus, 2000); // Poll every 2 seconds
-                            }
-                        } else {
-                            if (pollingInterval) {
-                                clearInterval(pollingInterval);
-                                pollingInterval = null;
-                            }
-                            // If it just stopped running, one final update might be good.
-                            // The current logic fetches one last time after status.running becomes false.
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error fetching import status:', error);
-                        statusMessageElement.textContent = 'Error fetching status.';
-                        if (pollingInterval) {
-                            clearInterval(pollingInterval);
-                            pollingInterval = null;
-                        }
-                    });
-            }
+            evtSource.onmessage = function(event) {
+                // console.log("SSE message received:", event.data);
+                try {
+                    const status = JSON.parse(event.data);
+                    updateStatusDisplay(status);
+                } catch (e) {
+                    console.error("Error parsing SSE data:", e, "Data:", event.data);
+                    // Optionally display a parsing error to the user if it becomes common
+                }
+            };
 
-            // Perform an initial check when the page loads.
-            // This is to catch the state if an import was already running or just finished.
-            fetchImportStatus();
+            evtSource.onerror = function(err) {
+                console.error("EventSource failed:", err);
+                statusMessageElement.textContent = 'Error connecting to status stream. Please refresh.';
+                // Optionally, you might want to try to reconnect or close the EventSource
+                // For simplicity, we'll just log the error and update status.
+                // EventSource itself attempts to reconnect automatically by default.
+                // If re-connection is not desired on certain errors, evtSource.close() can be called.
+            };
 
-            // Optional: If the form submission causes a full page reload (standard POST),
-            // the initial fetchImportStatus on DOMContentLoaded will pick up the new task.
-            // If you were to change form submission to AJAX, you'd trigger polling explicitly after submit.
-            // For now, the redirect and reload will mean the `fetchImportStatus()` above handles it.
-
-            // Check if there are any flash messages indicating an import has started.
-            // This can be another trigger to start polling if needed, though the initial fetch should cover it.
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        {% if 'import process started' in message.lower() and not pollingInterval %}
-                            // This logic might be redundant if initial fetchImportStatus already starts polling
-                            // but can act as a failsafe or quicker start.
-                            // console.log("Flash message indicates import started, ensuring polling is active.");
-                            // if (!pollingInterval) {
-                            //    pollingInterval = setInterval(fetchImportStatus, 2000);
-                            // }
-                        {% endif %}
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
+            // To ensure the very initial state is displayed (especially if no import is running),
+            // we can make one call to the old status endpoint.
+            // The SSE stream will send the current state upon connection if it has changed recently,
+            // but if it hasn't changed (e.g. server just started, no import run yet),
+            // the SSE stream might not send an initial message immediately until a change or keep-alive.
+            fetch("{{ url_for('get_import_status') }}")
+                .then(response => response.json())
+                .then(status => {
+                    updateStatusDisplay(status);
+                })
+                .catch(error => {
+                    console.error('Error fetching initial import status:', error);
+                });
         });
     </script>
 </body>
