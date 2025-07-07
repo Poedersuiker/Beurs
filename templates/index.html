@@ -5,12 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security Data</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <!-- date-fns and chartjs-adapter-date-fns must be included BEFORE Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/format.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <!-- Load Chart.js first -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <!-- Then load date-fns -->
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/format.min.js"></script> <!-- Using format.min.js as it was before, date-fns full lib might be date-fns.min.js -->
+    <!-- Finally, load the adapter -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <!-- Note: Using specific versions for Chart.js (3.9.1) and adapter to ensure compatibility. -->
-    <!-- If using latest Chart.js (e.g. 4.x), ensure adapter is compatible or update adapter version. -->
     <style>
         .chart-container { width: 80%; margin: auto; margin-bottom: 20px; } /* Added for chart */
         .filter-form { margin-bottom: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
