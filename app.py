@@ -177,26 +177,49 @@ def home():
     prices_for_chart = query.all()
 
     # Prepare data for the chart
-    chart_labels = []
-    chart_values = []
-    if prices_for_chart and selected_ticker: # Only generate chart data if a ticker is selected and data exists
-        chart_labels = [price.date.strftime('%Y-%m-%d') for price in prices_for_chart]
-        chart_values = [price.close for price in prices_for_chart] # Using close price
+    chart_datasets = [] # Will hold dataset objects for Chart.js
+    all_dates = set() # To collect all unique dates for the x-axis
+
+    if prices_for_chart:
+        if selected_ticker: # Single security selected
+            points = [{'x': price.date.strftime('%Y-%m-%d'), 'y': price.close} for price in prices_for_chart if price.close is not None]
+            if points: # Ensure there are valid points to plot
+                chart_datasets.append({
+                    'label': selected_ticker,
+                    'data': points
+                })
+        else: # "All securities" or no specific ticker selected - prepare for multi-line
+            prices_by_security = {}
+            for price in prices_for_chart:
+                if price.close is None: # Skip data points where close price is None
+                    continue
+                ticker = price.security.ticker
+                if ticker not in prices_by_security:
+                    prices_by_security[ticker] = []
+                # Data is already sorted by date overall, so append will maintain order per security
+                prices_by_security[ticker].append({'x': price.date.strftime('%Y-%m-%d'), 'y': price.close})
+
+            for ticker, points in prices_by_security.items():
+                if points: # Ensure there are valid points for this security
+                    chart_datasets.append({
+                        'label': ticker,
+                        'data': points
+                    })
 
     # For table display, prices are usually shown most recent first
     prices_for_table = sorted(prices_for_chart, key=lambda p: p.date, reverse=True)
 
-
+    # chart_x_labels is no longer needed as Chart.js infers from {x,y} data
     return render_template('index.html',
                            securities=securities_with_prices,
-                           prices=prices_for_table, # Use reversed for table
+                           prices=prices_for_table,
                            selected_ticker=selected_ticker,
                            filter_date_option=filter_date_option,
                            specific_date_str=specific_date_str,
                            start_date_str=start_date_str,
                            end_date_str=end_date_str,
-                           chart_labels=chart_labels, # Pass chart data
-                           chart_values=chart_values)   # Pass chart data
+                           chart_datasets=chart_datasets # Data now in [{label:'TICKER', data:[{x:'date',y:value},...]},...] format
+                           )
 
 @app.route('/admin')
 def admin():

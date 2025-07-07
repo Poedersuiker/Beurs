@@ -155,35 +155,49 @@
             }
 
             // Prepare data for the chart
-            // The chart_data will be passed from Flask and embedded in the template later
-            // For now, structure it assuming it will be available
-            const chartLabels = {{ chart_labels|tojson }};
-            const chartValues = {{ chart_values|tojson }};
-            const selectedTickerForChart = {{ selected_ticker|tojson }}; // Get selected ticker for label
+            const datasetsFromFlask = {{ chart_datasets|tojson }}; // Expects [{label: 'TICKER', data: [{x: 'YYYY-MM-DD', y: value}, ...]}, ...]
 
-            if (!chartLabels || !chartValues || chartLabels.length === 0 || chartValues.length === 0) {
-                // Optionally display a message on the canvas if no data
-                // For now, just don't render the chart if data is missing
+            if (!datasetsFromFlask || datasetsFromFlask.length === 0) {
                 console.log("No data available to render chart.");
-                // Clear previous chart if any by drawing an empty one or hiding canvas
-                // For simplicity, if there's no data, the canvas will be blank after destroying old chart.
                 return;
             }
+
+            // Define a list of colors for the lines
+            const lineColors = [
+                'rgb(75, 192, 192)', 'rgb(255, 99, 132)', 'rgb(54, 162, 235)',
+                'rgb(255, 206, 86)', 'rgb(153, 102, 255)', 'rgb(255, 159, 64)',
+                'rgb(201, 203, 207)', 'rgb(0, 0, 0)' // Add more colors if needed
+            ];
+
+            const chartJSDatasets = datasetsFromFlask.map((flaskDataset, index) => {
+                // Ensure data is in {x, y} format, Chart.js will parse x if it's a date string
+                return {
+                    label: flaskDataset.label,
+                    data: flaskDataset.data, // Already in [{x: 'YYYY-MM-DD', y: value}, ...] format from Flask
+                    borderColor: lineColors[index % lineColors.length],
+                    tension: 0.1,
+                    fill: false
+                };
+            });
 
             priceChartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: chartLabels,
-                    datasets: [{
-                        label: `Closing Price for ${selectedTickerForChart || 'Selected Security'}`,
-                        data: chartValues,
-                        borderColor: 'rgb(75, 192, 192)',
-                        tension: 0.1
-                    }]
+                    // labels: commonXLabels, // Not needed if datasets provide {x,y} points and x-axis is 'time'
+                    datasets: chartJSDatasets
                 },
                 options: {
                     scales: {
                         x: {
+                            type: 'time',
+                            time: {
+                                parser: 'yyyy-MM-dd', // Explicitly tell Chart.js how to parse the date strings from data.x
+                                unit: 'day',
+                                tooltipFormat: 'MMM dd, yyyy',
+                                displayFormats: {
+                                    day: 'MMM dd'
+                                }
+                            },
                             title: {
                                 display: true,
                                 text: 'Date'
@@ -194,11 +208,21 @@
                                 display: true,
                                 text: 'Closing Price'
                             },
-                            beginAtZero: false // Adjust based on data range, false is usually better for prices
+                            beginAtZero: false
                         }
                     },
                     responsive: true,
-                    maintainAspectRatio: true // Keep true for default behavior, or false to control via CSS height/width of container
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                        }
+                    }
                 }
             });
         }
