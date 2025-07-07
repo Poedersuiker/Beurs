@@ -3,8 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Home Page</title>
+    <title>Security Data</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        .filter-form { margin-bottom: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .filter-form label { margin-right: 5px; }
+        .filter-form select, .filter-form input[type="date"], .filter-form input[type="submit"] {
+            margin-right: 15px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .filter-form .date-options { margin-top: 10px; }
+        .filter-form .date-options input[type="radio"] { margin-right: 3px; }
+        .filter-form .date-specific-fields, .filter-form .date-range-fields { margin-top: 5px; margin-left: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .no-data { color: #777; font-style: italic; }
+        .messages { list-style: none; padding: 0; margin-bottom: 15px; }
+        .messages li { padding: 10px; margin-bottom: 10px; border-radius: 4px; }
+        .messages li.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .messages li.info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .messages li.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    </style>
 </head>
 <body>
     <nav>
@@ -13,7 +35,105 @@
         </ul>
     </nav>
     <div class="container">
-        <h1>Welcome to the Home Page</h1>
+        <h1>Security Information</h1>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="messages">
+                {% for category, message in messages %}
+                    <li class="{{ category }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        <form method="GET" action="{{ url_for('home') }}" class="filter-form">
+            <div>
+                <label for="security_ticker">Filter by Security:</label>
+                <select name="security_ticker" id="security_ticker">
+                    <option value="">All Securities</option>
+                    {% for sec in securities %}
+                        <option value="{{ sec.ticker }}" {% if sec.ticker == selected_ticker %}selected{% endif %}>
+                            {{ sec.name }} ({{ sec.ticker }})
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="date-options">
+                <label>Filter by Date:</label><br>
+                <input type="radio" id="date_all" name="date_option" value="all" {% if filter_date_option == 'all' %}checked{% endif %} onchange="toggleDateFields()">
+                <label for="date_all">All Dates</label>
+
+                <input type="radio" id="date_specific" name="date_option" value="specific" {% if filter_date_option == 'specific' %}checked{% endif %} onchange="toggleDateFields()">
+                <label for="date_specific">Specific Date</label>
+                <div class="date-specific-fields" id="specific_date_fields" style="display: {% if filter_date_option == 'specific' %}block{% else %}none{% endif %};">
+                    <input type="date" name="specific_date" value="{{ specific_date_str }}">
+                </div>
+
+                <input type="radio" id="date_last_year" name="date_option" value="last_year" {% if filter_date_option == 'last_year' %}checked{% endif %} onchange="toggleDateFields()">
+                <label for="date_last_year">Last Year</label>
+
+                <input type="radio" id="date_range" name="date_option" value="range" {% if filter_date_option == 'range' %}checked{% endif %} onchange="toggleDateFields()">
+                <label for="date_range">Date Range</label>
+                <div class="date-range-fields" id="range_date_fields" style="display: {% if filter_date_option == 'range' %}block{% else %}none{% endif %};">
+                    <label for="start_date">From:</label>
+                    <input type="date" name="start_date" id="start_date" value="{{ start_date_str }}">
+                    <label for="end_date">To:</label>
+                    <input type="date" name="end_date" id="end_date" value="{{ end_date_str }}">
+                </div>
+            </div>
+            <br>
+            <input type="submit" value="Apply Filters">
+        </form>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Name</th>
+                    <th>Date</th>
+                    <th>Open</th>
+                    <th>High</th>
+                    <th>Low</th>
+                    <th>Close</th>
+                    <th>Adj. Close</th>
+                    <th>Volume</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if prices %}
+                    {% for price in prices %}
+                    <tr>
+                        <td>{{ price.security.ticker }}</td>
+                        <td>{{ price.security.name }}</td>
+                        <td>{{ price.date.strftime('%Y-%m-%d') }}</td>
+                        <td>{{ "%.2f"|format(price.open) if price.open is not none else 'N/A' }}</td>
+                        <td>{{ "%.2f"|format(price.high) if price.high is not none else 'N/A' }}</td>
+                        <td>{{ "%.2f"|format(price.low) if price.low is not none else 'N/A' }}</td>
+                        <td>{{ "%.2f"|format(price.close) if price.close is not none else 'N/A' }}</td>
+                        <td>{{ "%.2f"|format(price.adj_close) if price.adj_close is not none else 'N/A' }}</td>
+                        <td>{{ "{:,}".format(price.volume) if price.volume is not none else 'N/A' }}</td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="9" class="no-data">No data available for the selected filters.</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
     </div>
+
+    <script>
+        function toggleDateFields() {
+            document.getElementById('specific_date_fields').style.display =
+                document.getElementById('date_specific').checked ? 'block' : 'none';
+            document.getElementById('range_date_fields').style.display =
+                document.getElementById('date_range').checked ? 'block' : 'none';
+        }
+        // Call on page load to set initial state
+        window.onload = toggleDateFields;
+    </script>
 </body>
 </html>
