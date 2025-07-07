@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security Data</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
+        .chart-container { width: 80%; margin: auto; margin-bottom: 20px; } /* Added for chart */
         .filter-form { margin-bottom: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
         .filter-form label { margin-right: 5px; }
         .filter-form select, .filter-form input[type="date"], .filter-form input[type="submit"] {
@@ -87,6 +89,10 @@
             <input type="submit" value="Apply Filters">
         </form>
 
+        <div class="chart-container">
+            <canvas id="priceChart"></canvas>
+        </div>
+
         <table>
             <thead>
                 <tr>
@@ -133,7 +139,69 @@
                 document.getElementById('date_range').checked ? 'block' : 'none';
         }
         // Call on page load to set initial state
-        window.onload = toggleDateFields;
+        window.onload = function() {
+            toggleDateFields();
+            renderPriceChart();
+        };
+
+        let priceChartInstance = null; // To hold the chart instance
+
+        function renderPriceChart() {
+            const ctx = document.getElementById('priceChart').getContext('2d');
+
+            // Destroy existing chart instance if it exists
+            if (priceChartInstance) {
+                priceChartInstance.destroy();
+            }
+
+            // Prepare data for the chart
+            // The chart_data will be passed from Flask and embedded in the template later
+            // For now, structure it assuming it will be available
+            const chartLabels = {{ chart_labels|tojson }};
+            const chartValues = {{ chart_values|tojson }};
+            const selectedTickerForChart = {{ selected_ticker|tojson }}; // Get selected ticker for label
+
+            if (!chartLabels || !chartValues || chartLabels.length === 0 || chartValues.length === 0) {
+                // Optionally display a message on the canvas if no data
+                // For now, just don't render the chart if data is missing
+                console.log("No data available to render chart.");
+                // Clear previous chart if any by drawing an empty one or hiding canvas
+                // For simplicity, if there's no data, the canvas will be blank after destroying old chart.
+                return;
+            }
+
+            priceChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: chartLabels,
+                    datasets: [{
+                        label: `Closing Price for ${selectedTickerForChart || 'Selected Security'}`,
+                        data: chartValues,
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Closing Price'
+                            },
+                            beginAtZero: false // Adjust based on data range, false is usually better for prices
+                        }
+                    },
+                    responsive: true,
+                    maintainAspectRatio: true // Keep true for default behavior, or false to control via CSS height/width of container
+                }
+            });
+        }
     </script>
 </body>
 </html>

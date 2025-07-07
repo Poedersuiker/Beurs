@@ -134,8 +134,11 @@ def run_migrations_on_startup():
 
 @app.route('/')
 def home():
-    # Fetch all securities for the filter dropdown
-    securities = Security.query.order_by(Security.name).all()
+    # Fetch securities that have at least one entry in DailyPrice for the filter dropdown
+    securities_with_prices = Security.query.join(DailyPrice, Security.id == DailyPrice.security_id)\
+                                           .distinct(Security.id)\
+                                           .order_by(Security.name)\
+                                           .all()
 
     # Get filter parameters from request arguments
     selected_ticker = request.args.get('security_ticker', '')
@@ -169,19 +172,31 @@ def home():
         except ValueError:
             flash('Invalid date format for range. Please use YYYY-MM-DD.', 'error')
 
-    # Order by date descending by default
-    query = query.order_by(DailyPrice.date.desc())
+    # Order by date ascending for charting purposes, then reverse for display if needed
+    query = query.order_by(DailyPrice.date.asc()) # Ascending for chart
+    prices_for_chart = query.all()
 
-    prices = query.all()
+    # Prepare data for the chart
+    chart_labels = []
+    chart_values = []
+    if prices_for_chart and selected_ticker: # Only generate chart data if a ticker is selected and data exists
+        chart_labels = [price.date.strftime('%Y-%m-%d') for price in prices_for_chart]
+        chart_values = [price.close for price in prices_for_chart] # Using close price
+
+    # For table display, prices are usually shown most recent first
+    prices_for_table = sorted(prices_for_chart, key=lambda p: p.date, reverse=True)
+
 
     return render_template('index.html',
-                           securities=securities,
-                           prices=prices,
+                           securities=securities_with_prices,
+                           prices=prices_for_table, # Use reversed for table
                            selected_ticker=selected_ticker,
                            filter_date_option=filter_date_option,
                            specific_date_str=specific_date_str,
                            start_date_str=start_date_str,
-                           end_date_str=end_date_str)
+                           end_date_str=end_date_str,
+                           chart_labels=chart_labels, # Pass chart data
+                           chart_values=chart_values)   # Pass chart data
 
 @app.route('/admin')
 def admin():
