@@ -134,7 +134,54 @@ def run_migrations_on_startup():
 
 @app.route('/')
 def home():
-    return render_template('index.html')
+    # Fetch all securities for the filter dropdown
+    securities = Security.query.order_by(Security.name).all()
+
+    # Get filter parameters from request arguments
+    selected_ticker = request.args.get('security_ticker', '')
+    filter_date_option = request.args.get('date_option', 'all') # 'all', 'specific', 'last_year', 'range'
+    specific_date_str = request.args.get('specific_date', '')
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+
+    query = DailyPrice.query.join(Security)
+
+    if selected_ticker:
+        query = query.filter(Security.ticker == selected_ticker)
+
+    if filter_date_option == 'specific' and specific_date_str:
+        try:
+            specific_date = datetime.strptime(specific_date_str, '%Y-%m-%d').date()
+            query = query.filter(DailyPrice.date == specific_date)
+        except ValueError:
+            flash('Invalid specific date format. Please use YYYY-MM-DD.', 'error')
+    elif filter_date_option == 'last_year':
+        one_year_ago = datetime.now().date() - timedelta(days=365)
+        query = query.filter(DailyPrice.date >= one_year_ago)
+    elif filter_date_option == 'range' and start_date_str and end_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            if start_date > end_date:
+                flash('Start date cannot be after end date.', 'error')
+            else:
+                query = query.filter(DailyPrice.date.between(start_date, end_date))
+        except ValueError:
+            flash('Invalid date format for range. Please use YYYY-MM-DD.', 'error')
+
+    # Order by date descending by default
+    query = query.order_by(DailyPrice.date.desc())
+
+    prices = query.all()
+
+    return render_template('index.html',
+                           securities=securities,
+                           prices=prices,
+                           selected_ticker=selected_ticker,
+                           filter_date_option=filter_date_option,
+                           specific_date_str=specific_date_str,
+                           start_date_str=start_date_str,
+                           end_date_str=end_date_str)
 
 @app.route('/admin')
 def admin():
