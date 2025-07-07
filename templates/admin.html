@@ -37,6 +37,26 @@
         {% else %}
             <p>Database status information is unavailable.</p>
         {% endif %}
+
+        <h2>Import Yahoo Finance Data</h2>
+        <form action="{{ url_for('import_yahoo_finance') }}" method="post">
+            <div>
+                <label for="security_id">Select Security:</label>
+                <select name="security_id" id="security_id">
+                    {% for security in securities %}
+                        <option value="{{ security.id }}">{{ security.ticker }} - {{ security.name }}</option>
+                    {% else %}
+                        <option value="">No securities found. Add some first.</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <br>
+            <div>
+                <button type="submit" name="time_period" value="25_years">Get 25 Years of History</button>
+                <button type="submit" name="time_period" value="1_year">Get Past Year of History</button>
+                <button type="submit" name="time_period" value="current_price">Get Current Pricing</button>
+            </div>
+        </form>
     </div>
 </body>
 </html>
