@@ -139,7 +139,73 @@ def home():
 @app.route('/admin')
 def admin():
     db_status_info = database.get_db_status_and_tables(db)
-    securities = Security.query.all()
+
+    # Ensure predefined securities are in the database
+    predefined_securities_list = [
+        # AEX Index
+        {'ticker': '^AEX', 'name': 'AEX Index', 'type': 'Index', 'exchange': 'AEB', 'currency': 'EUR'},
+
+        # Euronext Amsterdam Stocks
+        {'ticker': 'ADYEN.AS', 'name': 'Adyen', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'ASML.AS', 'name': 'ASML Holding', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'INGA.AS', 'name': 'ING Groep', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'PHIA.AS', 'name': 'Philips', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'HEIA.AS', 'name': 'Heineken', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'UNA.AS', 'name': 'Unilever PLC', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'}, # Unilever has multiple listings, .AS is Amsterdam
+        {'ticker': 'DSM.AS', 'name': 'DSM Firmenich AG', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'KPN.AS', 'name': 'KPN', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'RAND.AS', 'name': 'Randstad NV', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'WKL.AS', 'name': 'Wolters Kluwer', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'SHELL.AS', 'name': 'Shell PLC', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'ABN.AS', 'name': 'ABN AMRO Bank', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'AGN.AS', 'name': 'Aegon NV', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'AKZA.AS', 'name': 'Akzo Nobel NV', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'MT.AS', 'name': 'ArcelorMittal', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'}, # Also listed elsewhere
+        {'ticker': 'BESI.AS', 'name': 'BE Semiconductor Industries NV', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'IMCD.AS', 'name': 'IMCD NV', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'NN.AS', 'name': 'NN Group NV', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'PRX.AS', 'name': 'Prosus NV', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+        {'ticker': 'REN.AS', 'name': 'RELX PLC', 'type': 'Stock', 'exchange': 'AEB', 'currency': 'EUR'},
+
+
+        # Major Worldwide Indices
+        {'ticker': '^GSPC', 'name': 'S&P 500 (USA)', 'type': 'Index', 'exchange': 'SNP', 'currency': 'USD'},
+        {'ticker': '^DJI', 'name': 'Dow Jones Industrial Average (USA)', 'type': 'Index', 'exchange': 'DJI', 'currency': 'USD'},
+        {'ticker': '^IXIC', 'name': 'NASDAQ Composite (USA)', 'type': 'Index', 'exchange': 'NAS', 'currency': 'USD'},
+        {'ticker': '^FTSE', 'name': 'FTSE 100 (UK)', 'type': 'Index', 'exchange': 'FTS', 'currency': 'GBP'},
+        {'ticker': '^GDAXI', 'name': 'DAX (Germany)', 'type': 'Index', 'exchange': 'GER', 'currency': 'EUR'},
+        {'ticker': '^FCHI', 'name': 'CAC 40 (France)', 'type': 'Index', 'exchange': 'PAR', 'currency': 'EUR'},
+        {'ticker': '^STOXX50E', 'name': 'Euro Stoxx 50 (Eurozone)', 'type': 'Index', 'exchange': 'STOXX', 'currency': 'EUR'},
+        {'ticker': '^N225', 'name': 'Nikkei 225 (Japan)', 'type': 'Index', 'exchange': 'N225', 'currency': 'JPY'},
+        {'ticker': '^HSI', 'name': 'Hang Seng Index (Hong Kong)', 'type': 'Index', 'exchange': 'HKG', 'currency': 'HKD'},
+        {'ticker': '000001.SS', 'name': 'SSE Composite (Shanghai)', 'type': 'Index', 'exchange': 'SHH', 'currency': 'CNY'}
+    ]
+
+    existing_tickers = [s.ticker for s in Security.query.all()]
+    added_to_session = False
+    for sec_data in predefined_securities_list:
+        if sec_data['ticker'] not in existing_tickers:
+            security = Security(
+                ticker=sec_data['ticker'],
+                name=sec_data['name'],
+                type=sec_data.get('type', 'Unknown'),
+                exchange=sec_data.get('exchange', 'Unknown'),
+                currency=sec_data.get('currency', 'USD') # Default to USD if not specified
+            )
+            db.session.add(security)
+            existing_tickers.append(sec_data['ticker']) # Add to list to prevent re-adding in same session if duplicate in predefined_securities_list
+            added_to_session = True
+
+    if added_to_session:
+        try:
+            db.session.commit()
+            flash('New predefined securities added to the database.', 'info')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error adding predefined securities: {str(e)}', 'error')
+
+
+    securities = Security.query.order_by(Security.name).all() # Fetch all, now including predefined ones, ordered by name
     return render_template('admin.html', db_status=db_status_info, securities=securities)
 
 @app.route('/admin/import_yahoo_finance', methods=['POST'])
