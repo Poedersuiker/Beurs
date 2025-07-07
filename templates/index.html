@@ -5,7 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security Data</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Load Chart.js first -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <!-- Then load date-fns -->
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/format.min.js"></script> <!-- Using format.min.js as it was before, date-fns full lib might be date-fns.min.js -->
+    <!-- Finally, load the adapter -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <!-- Note: Using specific versions for Chart.js (3.9.1) and adapter to ensure compatibility. -->
     <style>
+        .chart-container { width: 80%; margin: auto; margin-bottom: 20px; } /* Added for chart */
         .filter-form { margin-bottom: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
         .filter-form label { margin-right: 5px; }
         .filter-form select, .filter-form input[type="date"], .filter-form input[type="submit"] {
@@ -87,6 +95,10 @@
             <input type="submit" value="Apply Filters">
         </form>
 
+        <div class="chart-container">
+            <canvas id="priceChart"></canvas>
+        </div>
+
         <table>
             <thead>
                 <tr>
@@ -133,7 +145,93 @@
                 document.getElementById('date_range').checked ? 'block' : 'none';
         }
         // Call on page load to set initial state
-        window.onload = toggleDateFields;
+        window.onload = function() {
+            toggleDateFields();
+            renderPriceChart();
+        };
+
+        let priceChartInstance = null; // To hold the chart instance
+
+        function renderPriceChart() {
+            const ctx = document.getElementById('priceChart').getContext('2d');
+
+            // Destroy existing chart instance if it exists
+            if (priceChartInstance) {
+                priceChartInstance.destroy();
+            }
+
+            // Prepare data for the chart
+            const datasetsFromFlask = {{ chart_datasets|tojson }}; // Expects [{label: 'TICKER', data: [{x: 'YYYY-MM-DD', y: value}, ...]}, ...]
+
+            if (!datasetsFromFlask || datasetsFromFlask.length === 0) {
+                console.log("No data available to render chart.");
+                return;
+            }
+
+            // Define a list of colors for the lines
+            const lineColors = [
+                'rgb(75, 192, 192)', 'rgb(255, 99, 132)', 'rgb(54, 162, 235)',
+                'rgb(255, 206, 86)', 'rgb(153, 102, 255)', 'rgb(255, 159, 64)',
+                'rgb(201, 203, 207)', 'rgb(0, 0, 0)' // Add more colors if needed
+            ];
+
+            const chartJSDatasets = datasetsFromFlask.map((flaskDataset, index) => {
+                // Ensure data is in {x, y} format, Chart.js will parse x if it's a date string
+                return {
+                    label: flaskDataset.label,
+                    data: flaskDataset.data, // Already in [{x: 'YYYY-MM-DD', y: value}, ...] format from Flask
+                    borderColor: lineColors[index % lineColors.length],
+                    tension: 0.1,
+                    fill: false
+                };
+            });
+
+            priceChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    // labels: commonXLabels, // Not needed if datasets provide {x,y} points and x-axis is 'time'
+                    datasets: chartJSDatasets
+                },
+                options: {
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                parser: 'yyyy-MM-dd', // Explicitly tell Chart.js how to parse the date strings from data.x
+                                unit: 'day',
+                                tooltipFormat: 'MMM dd, yyyy',
+                                displayFormats: {
+                                    day: 'MMM dd'
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Closing Price'
+                            },
+                            beginAtZero: false
+                        }
+                    },
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                        }
+                    }
+                }
+            });
+        }
     </script>
 </body>
 </html>
