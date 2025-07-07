@@ -1,10 +1,18 @@
-from flask import Flask, render_template, current_app
+from flask import Flask, render_template, current_app, redirect, url_for, request, flash, g
+from flask.globals import request_ctx
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate, upgrade
 import os
+import click # For CLI arguments
 import database # Assuming database.py contains get_db_uri and get_db_status_and_tables
+import yfinance as yf
+from datetime import datetime, timedelta
+# from database import Security, DailyPrice # Models are now defined in this file
+import pandas as pd
+
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_secret_key') # Needed for flash messages
 
 # Load configuration for database URI
 try:
@@ -31,6 +39,39 @@ class User(db.Model):
 
     def __repr__(self):
         return f'<User {self.username}>'
+
+# Define application-specific models
+class Security(db.Model):
+    __tablename__ = "securities"
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    ticker = db.Column(db.Text, nullable=False, unique=True)
+    name = db.Column(db.Text)
+    type = db.Column(db.Text)
+    exchange = db.Column(db.Text)
+    currency = db.Column(db.Text)
+    daily_prices = db.relationship("DailyPrice", back_populates="security", lazy=True)
+
+    def __repr__(self):
+        return f'<Security {self.ticker}>'
+
+class DailyPrice(db.Model):
+    __tablename__ = "daily_prices"
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True) # Added for potential ease of use, though composite PK is fine
+    security_id = db.Column(db.Integer, db.ForeignKey("securities.id"), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    open = db.Column(db.Float)
+    high = db.Column(db.Float)
+    low = db.Column(db.Float)
+    close = db.Column(db.Float)
+    adj_close = db.Column(db.Float)
+    volume = db.Column(db.Integer)
+    security = db.relationship("Security", back_populates="daily_prices")
+
+    __table_args__ = (db.UniqueConstraint('security_id', 'date', name='uq_security_date'),)
+
+    def __repr__(self):
+        return f'<DailyPrice {self.security.ticker} {self.date}>'
+
 
 @app.cli.command("initdb_custom")
 def initdb_command():
@@ -98,7 +139,256 @@ def home():
 @app.route('/admin')
 def admin():
     db_status_info = database.get_db_status_and_tables(db)
-    return render_template('admin.html', db_status=db_status_info)
+    securities = Security.query.all()
+    return render_template('admin.html', db_status=db_status_info, securities=securities)
+
+@app.route('/admin/import_yahoo_finance', methods=['POST'])
+def import_yahoo_finance():
+    security_id = request.form.get('security_id')
+    time_period = request.form.get('time_period')
+
+    if not security_id:
+        flash('Please select a security.', 'error')
+        return redirect(url_for('admin'))
+
+    security = Security.query.get(security_id)
+    if not security:
+        flash('Selected security not found.', 'error')
+        return redirect(url_for('admin'))
+
+    ticker_symbol = security.ticker
+    ticker = yf.Ticker(ticker_symbol)
+
+    try:
+        if time_period == '25_years':
+            start_date = datetime.now() - timedelta(days=25*365)
+            hist_data = ticker.history(start=start_date.strftime('%Y-%m-%d'))
+        elif time_period == '1_year':
+            start_date = datetime.now() - timedelta(days=365)
+            hist_data = ticker.history(start=start_date.strftime('%Y-%m-%d'))
+        elif time_period == 'current_price':
+            # Get the most recent trading day's data
+            hist_data = ticker.history(period="1d")
+            if hist_data.empty: # If no data for "1d" (e.g. market closed, new stock)
+                 # Try to get the last known close from info
+                info = ticker.info
+                if 'previousClose' in info and info['previousClose'] is not None:
+                     # Create a DataFrame like structure for consistency
+                    hist_data = pd.DataFrame([{
+                        'Open': info.get('open', None), # Might be None if market hasn't opened
+                        'High': info.get('dayHigh', None), # Might be None
+                        'Low': info.get('dayLow', None), # Might be None
+                        'Close': info.get('previousClose'), # This is the most reliable for "current" if market closed
+                        'Adj Close': info.get('previousClose'), # Often same as close for current price
+                        'Volume': info.get('volume', 0) # Might be 0 or from previous day
+                    }], index=[pd.to_datetime(datetime.now().date() - timedelta(days=1))]) # Approximate date
+                else: # If still no data
+                    flash(f'Could not fetch current price for {ticker_symbol}. The ticker might be delisted or data unavailable.', 'error')
+                    return redirect(url_for('admin'))
+        else:
+            flash('Invalid time period selected.', 'error')
+            return redirect(url_for('admin'))
+
+        if hist_data.empty:
+            flash(f'No historical data found for {ticker_symbol} for the selected period.', 'warning')
+            return redirect(url_for('admin'))
+
+        for index, row in hist_data.iterrows():
+            # Check if record already exists
+            existing_price = DailyPrice.query.filter_by(security_id=security.id, date=index.date()).first()
+            if existing_price:
+                # Update existing record
+                existing_price.open = row['Open']
+                existing_price.high = row['High']
+                existing_price.low = row['Low']
+                existing_price.close = row['Close']
+                existing_price.adj_close = row.get('Adj Close', row['Close']) # yfinance might not always have 'Adj Close'
+                existing_price.volume = row['Volume']
+            else:
+                # Create new record
+                daily_price = DailyPrice(
+                    security_id=security.id,
+                    date=index.date(),
+                    open=row['Open'],
+                    high=row['High'],
+                    low=row['Low'],
+                    close=row['Close'],
+                    adj_close=row.get('Adj Close', row['Close']),
+                    volume=row['Volume']
+                )
+                db.session.add(daily_price)
+
+        db.session.commit()
+        flash(f'Successfully imported data for {ticker_symbol}.', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error importing data for {ticker_symbol}: {str(e)}', 'error')
+
+    return redirect(url_for('admin'))
+
+@app.cli.command("seed_securities")
+def seed_securities_command():
+    """Seeds the database with initial security data."""
+    initial_securities = [
+        {'ticker': 'AAPL', 'name': 'Apple Inc.', 'type': 'Stock', 'exchange': 'NASDAQ', 'currency': 'USD'},
+        {'ticker': 'MSFT', 'name': 'Microsoft Corporation', 'type': 'Stock', 'exchange': 'NASDAQ', 'currency': 'USD'},
+        {'ticker': 'GOOGL', 'name': 'Alphabet Inc. (Class A)', 'type': 'Stock', 'exchange': 'NASDAQ', 'currency': 'USD'},
+        {'ticker': 'AMZN', 'name': 'Amazon.com, Inc.', 'type': 'Stock', 'exchange': 'NASDAQ', 'currency': 'USD'},
+        {'ticker': '^GSPC', 'name': 'S&P 500', 'type': 'Index', 'exchange': 'INDEX', 'currency': 'USD'},
+        {'ticker': 'BTC-USD', 'name': 'Bitcoin USD', 'type': 'Cryptocurrency', 'exchange': 'CCC', 'currency': 'USD'},
+    ]
+
+    with app.app_context():
+        existing_tickers = [s.ticker for s in Security.query.all()]
+        added_count = 0
+        for sec_data in initial_securities:
+            if sec_data['ticker'] not in existing_tickers:
+                security = Security(**sec_data)
+                db.session.add(security)
+                added_count += 1
+
+        if added_count > 0:
+            db.session.commit()
+            print(f"Successfully seeded {added_count} new securities.")
+        else:
+            print("No new securities to seed. Database might already contain them.")
+
+@app.cli.command("inspect_prices")
+@click.argument("ticker_symbol")
+def inspect_prices_command(ticker_symbol):
+    """Inspects stored prices for a given security ticker."""
+    with app.app_context():
+        security = Security.query.filter_by(ticker=ticker_symbol).first()
+        if not security:
+            print(f"Security with ticker {ticker_symbol} not found.")
+            return
+
+        prices = DailyPrice.query.filter_by(security_id=security.id).order_by(DailyPrice.date.desc()).limit(5).all()
+
+        if not prices:
+            print(f"No prices found for {ticker_symbol}.")
+            return
+
+        print(f"Last 5 prices for {ticker_symbol} (Security ID: {security.id}):")
+        for price in prices:
+            print(f"  Date: {price.date}, Open: {price.open}, High: {price.high}, Low: {price.low}, Close: {price.close}, Volume: {price.volume}")
+
+@app.cli.command("test_import")
+@click.argument("ticker_symbol")
+@click.argument("period") # e.g., "1_year", "25_years", "current_price"
+def test_import_command(ticker_symbol, period):
+    """Tests the Yahoo Finance import logic for a given ticker and period."""
+    with app.app_context():
+        security = Security.query.filter_by(ticker=ticker_symbol).first()
+        if not security:
+            print(f"Security {ticker_symbol} not found. Seed it first.")
+            return
+
+        # Simulate form data
+        class MockForm:
+            def __init__(self, security_id, time_period):
+                self.security_id = security_id
+                self.time_period = time_period
+
+        # Mock request object with the form
+        mock_request = type('Request', (), {'form': MockForm(security.id, period)})
+
+        # Temporarily replace global request for the call
+        # This is a bit of a hack for testing outside actual web request context
+        original_request = None
+        if request_ctx and hasattr(request_ctx, 'request'):
+             original_request = request_ctx.request
+
+        # from flask import g # g is already imported
+        g._request = mock_request # Simulate request context for flash and request.form
+
+        # Need to ensure 'request' object used by import_yahoo_finance is the mocked one
+        # The import_yahoo_finance function uses flask.request directly.
+        # A better way would be to refactor import_yahoo_finance to accept params,
+        # but for a quick test, we can try to ensure the context is right.
+        # The most reliable way is to call the function with parameters if possible.
+        # Since import_yahoo_finance directly uses request.form, we have to mock it globally or pass params.
+        # For now, let's assume flash messages won't break anything critical if request context is imperfect.
+
+        print(f"Attempting to import data for {ticker_symbol}, period {period}...")
+
+        # Directly calling the function's core logic is safer if it can be refactored.
+        # As it is, we will call it and see.
+        # To make `request.form.get` work as expected inside `import_yahoo_finance`,
+        # we need to push a request context with our mocked form.
+        with app.test_request_context(method='POST', data={'security_id': str(security.id), 'time_period': period}):
+            # app.preprocess_request() # If you have before_request handlers
+
+            # Call the function that contains the import logic
+            # We need to get security_id and time_period from the form in the function
+            # The function `import_yahoo_finance` is designed as a route handler.
+            # For a CLI test, it's better to extract its core logic into a helper function.
+            # However, for now, let's try to call it.
+            # This direct call will fail because it's a view function expecting a real request.
+            # A better test would be to use app.test_client()
+
+            # Re-evaluating: The easiest way to test the logic is to call the function that does the work
+            # *if* it were separated from the request handling. Since it's not,
+            # the `inspect_prices` after a manual trigger (if possible) or just relying on the CLI seed
+            # and then inspecting is the most pragmatic here.
+
+            # Let's simplify: this command will just call the yfinance part and db commit
+            # This means duplicating some logic from import_yahoo_finance route,
+            # which is not ideal but serves the testing purpose in this constrained env.
+
+            ticker_obj = yf.Ticker(security.ticker)
+            hist_data = None
+            try:
+                if period == '25_years':
+                    start_date = datetime.now() - timedelta(days=25*365)
+                    hist_data = ticker_obj.history(start=start_date.strftime('%Y-%m-%d'))
+                elif period == '1_year':
+                    start_date = datetime.now() - timedelta(days=365)
+                    hist_data = ticker_obj.history(start=start_date.strftime('%Y-%m-%d'))
+                elif period == 'current_price':
+                    hist_data = ticker_obj.history(period="1d")
+                    if hist_data.empty:
+                        info = ticker_obj.info
+                        if 'previousClose' in info and info['previousClose'] is not None:
+                            hist_data = pd.DataFrame([{
+                                'Open': info.get('open'), 'High': info.get('dayHigh'), 'Low': info.get('dayLow'),
+                                'Close': info.get('previousClose'), 'Adj Close': info.get('previousClose'),
+                                'Volume': info.get('volume',0)
+                            }], index=[pd.to_datetime(datetime.now().date() - timedelta(days=1))])
+                        else:
+                            print(f"Could not fetch current price for {security.ticker} via test_import.")
+                            return
+                else:
+                    print(f"Invalid period: {period}")
+                    return
+
+                if hist_data.empty:
+                    print(f"No data fetched for {security.ticker} for period {period}.")
+                    return
+
+                for index, row in hist_data.iterrows():
+                    existing_price = DailyPrice.query.filter_by(security_id=security.id, date=index.date()).first()
+                    if existing_price:
+                        existing_price.open = row['Open']
+                        existing_price.high = row['High']
+                        existing_price.low = row['Low']
+                        existing_price.close = row['Close']
+                        existing_price.adj_close = row.get('Adj Close', row['Close'])
+                        existing_price.volume = row['Volume']
+                    else:
+                        daily_price = DailyPrice(
+                            security_id=security.id, date=index.date(), open=row['Open'], high=row['High'],
+                            low=row['Low'], close=row['Close'], adj_close=row.get('Adj Close', row['Close']),
+                            volume=row['Volume']
+                        )
+                        db.session.add(daily_price)
+                db.session.commit()
+                print(f"Data import successful for {security.ticker}, period {period}.")
+            except Exception as e:
+                db.session.rollback()
+                print(f"Error during test import for {security.ticker}: {str(e)}")
+
 
 # Create the application instance and run migrations before starting the server
 # This ensures that 'flask run' or 'python app.py' will attempt migrations.

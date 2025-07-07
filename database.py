@@ -25,37 +25,6 @@ except ImportError:
 # Define the SQLAlchemy base for declarative models
 Base = declarative_base()
 
-# Import necessary types for defining models
-from sqlalchemy import Column, Integer, String, Text, REAL, Date, ForeignKey
-from sqlalchemy.orm import relationship
-
-class Security(Base):
-    __tablename__ = "securities"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    ticker = Column(Text, nullable=False, unique=True)
-    name = Column(Text)
-    type = Column(Text)
-    exchange = Column(Text)
-    currency = Column(Text)
-
-    daily_prices = relationship("DailyPrice", back_populates="security")
-
-class DailyPrice(Base):
-    __tablename__ = "daily_prices"
-
-    security_id = Column(Integer, ForeignKey("securities.id"), primary_key=True)
-    date = Column(Date, primary_key=True)
-    open = Column(REAL)
-    high = Column(REAL)
-    low = Column(REAL)
-    close = Column(REAL)
-    adj_close = Column(REAL)
-    volume = Column(Integer)
-
-    security = relationship("Security", back_populates="daily_prices")
-
-
 # Global engine and session variables
 engine = None
 SessionLocal = None
