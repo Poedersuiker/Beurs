@@ -1,4 +1,4 @@
-from flask import Flask, render_template, current_app, redirect, url_for, request, flash, g
+from flask import Flask, render_template, current_app, redirect, url_for, request, flash, g, jsonify, Response
 from flask.globals import request_ctx
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate, upgrade
@@ -9,10 +9,28 @@ import yfinance as yf
 from datetime import datetime, timedelta
 # from database import Security, DailyPrice # Models are now defined in this file
 import pandas as pd
+import threading
+import time
 
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_secret_key') # Needed for flash messages
+
+import json # For serializing data for SSE
+
+# Global variable to store import status
+import_status = {
+    'running': False,
+    'message': '',
+    'progress': 0, # Overall progress percentage
+    'current_task': '', # E.g., "Fetching AAPL", "Processing data"
+    'error': False,
+    'log': [], # A list of log messages
+    'last_updated': time.time() # Timestamp for SSE to detect changes
+}
+# Lock for synchronizing access to import_status
+import_status_lock = threading.Lock()
+
 
 # Load configuration for database URI
 try:
@@ -293,90 +311,196 @@ def admin():
     securities = Security.query.order_by(Security.name).all() # Fetch all, now including predefined ones, ordered by name
     return render_template('admin.html', db_status=db_status_info, securities=securities)
 
+# Helper function to update status
+def _update_import_status(message, current_task_msg, progress_val=None, error_flag=False, log_msg=None, running_flag=None):
+    with import_status_lock:
+        import_status['message'] = message
+        import_status['current_task'] = current_task_msg
+        if progress_val is not None:
+            import_status['progress'] = progress_val
+        import_status['error'] = error_flag
+        if log_msg: # Append to log
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            import_status['log'].append(f"[{timestamp}] {log_msg}")
+        if running_flag is not None:
+            import_status['running'] = running_flag
+        if not import_status['running']: # If process stopped, ensure progress is 100 or 0 if error
+            import_status['progress'] = 0 if error_flag else 100
+        import_status['last_updated'] = time.time() # Update timestamp
+
+
+def _import_yahoo_finance_task(app_context, security_id_task, time_period_task):
+    with app_context: # Use the passed application context
+        try:
+            _update_import_status("Import process started...", "Initializing", 0, log_msg="Import process initiated.", running_flag=True)
+
+            security = Security.query.get(security_id_task)
+            if not security:
+                _update_import_status("Error: Security not found.", "Error", 0, error_flag=True, log_msg=f"Security ID {security_id_task} not found.", running_flag=False)
+                return
+
+            ticker_symbol = security.ticker
+            _update_import_status(f"Fetching data for {ticker_symbol}...", "Fetching data", 10, log_msg=f"Fetching data for {ticker_symbol} ({time_period_task}).")
+
+            ticker = yf.Ticker(ticker_symbol)
+            hist_data = None
+
+            if time_period_task == '25_years':
+                start_date = datetime.now() - timedelta(days=25*365)
+                hist_data = ticker.history(start=start_date.strftime('%Y-%m-%d'))
+            elif time_period_task == '1_year':
+                start_date = datetime.now() - timedelta(days=365)
+                hist_data = ticker.history(start=start_date.strftime('%Y-%m-%d'))
+            elif time_period_task == 'current_price':
+                hist_data = ticker.history(period="1d")
+                if hist_data.empty:
+                    info = ticker.info
+                    if 'previousClose' in info and info['previousClose'] is not None:
+                        hist_data = pd.DataFrame([{
+                            'Open': info.get('open', None), 'High': info.get('dayHigh', None),
+                            'Low': info.get('dayLow', None), 'Close': info.get('previousClose'),
+                            'Adj Close': info.get('previousClose'), 'Volume': info.get('volume', 0)
+                        }], index=[pd.to_datetime(datetime.now().date() - timedelta(days=1))]) # Approximate date
+                    else:
+                        _update_import_status(f"Could not fetch current price for {ticker_symbol}.", "Error", 0, error_flag=True, log_msg=f"No current price data for {ticker_symbol}.", running_flag=False)
+                        return
+            else:
+                _update_import_status("Invalid time period selected.", "Error", 0, error_flag=True, log_msg=f"Invalid time period: {time_period_task}.", running_flag=False)
+                return
+
+            if hist_data.empty:
+                _update_import_status(f"No historical data found for {ticker_symbol} for the selected period.", "Warning", 100, log_msg=f"No yfinance data for {ticker_symbol}, period {time_period_task}.", running_flag=False) # Not an error, but complete.
+                return
+
+            _update_import_status(f"Processing data for {ticker_symbol}...", "Processing data", 30, log_msg=f"Data fetched. Rows: {len(hist_data)}. Processing...")
+
+            total_rows = len(hist_data)
+            processed_rows = 0
+            for index, row in hist_data.iterrows():
+                # Create a new session for each operation or batch for thread safety with Flask-SQLAlchemy
+                # This is a simplified example; for long tasks, consider session management carefully.
+                # A dedicated session for the thread might be better.
+                # However, Flask-SQLAlchemy's default scoped session should handle this if app_context is active.
+
+                existing_price = DailyPrice.query.filter_by(security_id=security.id, date=index.date()).first()
+                if existing_price:
+                    existing_price.open = row['Open']
+                    existing_price.high = row['High']
+                    existing_price.low = row['Low']
+                    existing_price.close = row['Close']
+                    existing_price.adj_close = row.get('Adj Close', row['Close'])
+                    existing_price.volume = row['Volume']
+                else:
+                    daily_price = DailyPrice(
+                        security_id=security.id, date=index.date(),
+                        open=row['Open'], high=row['High'], low=row['Low'], close=row['Close'],
+                        adj_close=row.get('Adj Close', row['Close']), volume=row['Volume']
+                    )
+                    db.session.add(daily_price)
+
+                processed_rows += 1
+                progress = 30 + int(70 * processed_rows / total_rows) # Progress from 30% to 100%
+                if processed_rows % (total_rows // 10 if total_rows > 10 else 1) == 0 or processed_rows == total_rows: # Update status periodically
+                     _update_import_status(f"Importing data for {ticker_symbol}: {processed_rows}/{total_rows} rows.", "Importing", progress, log_msg=f"Processed {processed_rows}/{total_rows} for {ticker_symbol}.")
+
+
+            db.session.commit()
+            _update_import_status(f"Successfully imported data for {ticker_symbol}.", "Completed", 100, log_msg=f"Import complete for {ticker_symbol}.", running_flag=False)
+
+        except Exception as e:
+            db.session.rollback()
+            _update_import_status(f"Error importing data for {getattr(security, 'ticker', 'N/A')}: {str(e)}", "Error", 0, error_flag=True, log_msg=f"Exception during import: {str(e)}", running_flag=False)
+        finally:
+            # Ensure running flag is set to false if not already.
+            with import_status_lock:
+                if import_status['running']: # If an early exit didn't set it.
+                    import_status['running'] = False
+                    if not import_status['error']: # if no error was set, ensure progress is 100
+                         import_status['progress'] = 100
+
+
 @app.route('/admin/import_yahoo_finance', methods=['POST'])
 def import_yahoo_finance():
+    with import_status_lock:
+        if import_status['running']:
+            flash('An import process is already running.', 'warning')
+            return redirect(url_for('admin'))
+
+        # Reset status for a new import
+        import_status.update({
+            'running': True,
+            'message': 'Initializing import...',
+            'progress': 0,
+            'current_task': 'Starting',
+            'error': False,
+            'log': [f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] New import request received."],
+            'last_updated': time.time()
+        })
+
     security_id = request.form.get('security_id')
-    time_period = request.form.get('time_period')
+    time_period = request.form.get('time_period') # This is the button value
 
     if not security_id:
-        flash('Please select a security.', 'error')
-        return redirect(url_for('admin'))
+        _update_import_status("Error: No security selected.", "Error", 0, error_flag=True, log_msg="No security_id provided.", running_flag=False)
+        flash('Please select a security.', 'error') # Flash for immediate feedback on redirect
+        return redirect(url_for('admin')) # Redirect because the task won't even start
 
-    security = Security.query.get(security_id)
-    if not security:
-        flash('Selected security not found.', 'error')
-        return redirect(url_for('admin'))
+    # Create a new application context for the thread
+    # This is crucial for database operations and using app config in the thread
+    thread_app_context = app.app_context()
 
-    ticker_symbol = security.ticker
-    ticker = yf.Ticker(ticker_symbol)
+    thread = threading.Thread(target=_import_yahoo_finance_task, args=(thread_app_context, security_id, time_period))
+    thread.daemon = True # Allows main program to exit even if threads are still running
+    thread.start()
 
-    try:
-        if time_period == '25_years':
-            start_date = datetime.now() - timedelta(days=25*365)
-            hist_data = ticker.history(start=start_date.strftime('%Y-%m-%d'))
-        elif time_period == '1_year':
-            start_date = datetime.now() - timedelta(days=365)
-            hist_data = ticker.history(start=start_date.strftime('%Y-%m-%d'))
-        elif time_period == 'current_price':
-            # Get the most recent trading day's data
-            hist_data = ticker.history(period="1d")
-            if hist_data.empty: # If no data for "1d" (e.g. market closed, new stock)
-                 # Try to get the last known close from info
-                info = ticker.info
-                if 'previousClose' in info and info['previousClose'] is not None:
-                     # Create a DataFrame like structure for consistency
-                    hist_data = pd.DataFrame([{
-                        'Open': info.get('open', None), # Might be None if market hasn't opened
-                        'High': info.get('dayHigh', None), # Might be None
-                        'Low': info.get('dayLow', None), # Might be None
-                        'Close': info.get('previousClose'), # This is the most reliable for "current" if market closed
-                        'Adj Close': info.get('previousClose'), # Often same as close for current price
-                        'Volume': info.get('volume', 0) # Might be 0 or from previous day
-                    }], index=[pd.to_datetime(datetime.now().date() - timedelta(days=1))]) # Approximate date
-                else: # If still no data
-                    flash(f'Could not fetch current price for {ticker_symbol}. The ticker might be delisted or data unavailable.', 'error')
-                    return redirect(url_for('admin'))
-        else:
-            flash('Invalid time period selected.', 'error')
-            return redirect(url_for('admin'))
-
-        if hist_data.empty:
-            flash(f'No historical data found for {ticker_symbol} for the selected period.', 'warning')
-            return redirect(url_for('admin'))
-
-        for index, row in hist_data.iterrows():
-            # Check if record already exists
-            existing_price = DailyPrice.query.filter_by(security_id=security.id, date=index.date()).first()
-            if existing_price:
-                # Update existing record
-                existing_price.open = row['Open']
-                existing_price.high = row['High']
-                existing_price.low = row['Low']
-                existing_price.close = row['Close']
-                existing_price.adj_close = row.get('Adj Close', row['Close']) # yfinance might not always have 'Adj Close'
-                existing_price.volume = row['Volume']
-            else:
-                # Create new record
-                daily_price = DailyPrice(
-                    security_id=security.id,
-                    date=index.date(),
-                    open=row['Open'],
-                    high=row['High'],
-                    low=row['Low'],
-                    close=row['Close'],
-                    adj_close=row.get('Adj Close', row['Close']),
-                    volume=row['Volume']
-                )
-                db.session.add(daily_price)
-
-        db.session.commit()
-        flash(f'Successfully imported data for {ticker_symbol}.', 'success')
-
-    except Exception as e:
-        db.session.rollback()
-        flash(f'Error importing data for {ticker_symbol}: {str(e)}', 'error')
-
+    flash('Yahoo Finance import process started in the background. See status below.', 'info')
     return redirect(url_for('admin'))
+
+
+@app.route('/admin/import_status')
+def get_import_status():
+    with import_status_lock:
+        # Return a copy to avoid issues if the dict is modified while serializing to JSON
+        status_copy = dict(import_status)
+    return jsonify(status_copy)
+
+@app.route('/admin/import_status_stream')
+def import_status_stream():
+    def generate_status():
+        last_sent_timestamp = 0
+        try:
+            while True:
+                with import_status_lock:
+                    current_status_timestamp = import_status.get('last_updated', 0)
+                    if current_status_timestamp > last_sent_timestamp:
+                        status_to_send = dict(import_status) # Send a copy
+                        last_sent_timestamp = current_status_timestamp
+                        # SSE format: data: <json_string>\n\n
+                        yield f"data: {json.dumps(status_to_send)}\n\n"
+
+                # Check if the import is still running or just finished/errored.
+                # If not running and we've sent the final state, we can consider closing the stream
+                # or let the client decide to close based on 'running' flag.
+                # For simplicity, we keep it running but send less frequently if idle.
+                with import_status_lock:
+                    is_running = import_status['running']
+
+                if not is_running and last_sent_timestamp == current_status_timestamp :
+                    # If not running and last status sent, check less frequently or send keep-alive
+                    time.sleep(5) # Check less often if idle
+                    yield ": keep-alive\n\n" # Send a comment as a keep-alive
+                else:
+                    time.sleep(0.5) # Poll status more frequently when active or change pending
+        except GeneratorExit:
+            # This occurs when the client disconnects
+            print("SSE client disconnected")
+            # Perform any cleanup if necessary
+        except Exception as e:
+            print(f"Error in SSE stream: {e}")
+
+
+    return Response(generate_status(), mimetype='text/event-stream')
+
 
 @app.cli.command("seed_securities")
 def seed_securities_command():
