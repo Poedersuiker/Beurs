@@ -154,6 +154,61 @@
                 .catch(error => {
                     console.error('Error fetching initial import status:', error);
                 });
+
+            // --- Custom logic for dropdown manipulation ---
+            let removedOptionData = null; // To store { value, text, originalIndex } of the removed option
+            const importForm = document.querySelector('form[action="{{ url_for('import_yahoo_finance') }}"]');
+            const securitySelectElement = document.getElementById('security_id');
+
+            if (importForm && securitySelectElement) {
+                importForm.addEventListener('submit', function(event) {
+                    // Check if an import is already considered "running" by the server status via SSE
+                    // This is a client-side check to prevent removing an option if the server might reject the new import
+                    if (statusMessageElement.textContent === 'Import process started...' || progressBarElement.style.backgroundColor === 'rgb(33, 150, 243)') { // Blue (in-progress)
+                        // Do not remove if an import is visually indicated as active from SSE
+                        // The server will flash a message "An import process is already running."
+                        console.warn("Client-side: Import appears to be running based on SSE status. Not removing option yet.");
+                        return;
+                    }
+
+                    const selectedOption = securitySelectElement.options[securitySelectElement.selectedIndex];
+                    if (selectedOption && selectedOption.value) {
+                        // Store details of the selected option
+                        removedOptionData = {
+                            value: selectedOption.value,
+                            text: selectedOption.text,
+                            originalIndex: securitySelectElement.selectedIndex // Store original index
+                        };
+                        // Remove the option from the dropdown
+                        securitySelectElement.remove(securitySelectElement.selectedIndex);
+                        console.log("Removed option:", removedOptionData);
+                    }
+                });
+            }
+
+            // Modify updateStatusDisplay to handle re-adding the option on failure
+            const originalUpdateStatusDisplay = updateStatusDisplay;
+            updateStatusDisplay = function(status) {
+                originalUpdateStatusDisplay(status); // Call the original function first
+
+                if (removedOptionData) { // If an option was removed by this client
+                    if (status.error && !status.running) { // Import failed
+                        console.log("Import failed. Re-adding option:", removedOptionData);
+                        const option = new Option(removedOptionData.text, removedOptionData.value);
+                        // Attempt to re-insert at original position, otherwise append
+                        if (removedOptionData.originalIndex !== undefined && removedOptionData.originalIndex < securitySelectElement.options.length) {
+                            securitySelectElement.add(option, securitySelectElement.options[removedOptionData.originalIndex]);
+                        } else {
+                            securitySelectElement.add(option);
+                        }
+                        removedOptionData = null; // Clear stored data
+                    } else if (!status.running && !status.error && status.progress === 100) { // Import successful
+                        console.log("Import successful. Option remains removed:", removedOptionData);
+                        removedOptionData = null; // Clear stored data, it's successfully processed
+                    }
+                }
+            }
+            // --- End of custom logic ---
         });
     </script>
 </body>
