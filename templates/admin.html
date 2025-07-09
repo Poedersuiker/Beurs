@@ -44,12 +44,15 @@
                 <label for="security_id">Select Security:</label>
                 <select name="security_id" id="security_id">
                     {% for security in securities %}
-                        <option value="{{ security.id }}">{{ security.ticker }} - {{ security.name }}</option>
+                        <option value="{{ security.id }}" {% if security.imported_25yr_data_at %}disabled{% endif %}>
+                            {{ security.ticker }} - {{ security.name }} {% if security.imported_25yr_data_at %}(History Loaded){% endif %}
+                        </option>
                     {% else %}
                         <option value="">No securities found. Add some first.</option>
                     {% endfor %}
                 </select>
             </div>
+            <input type="hidden" name="selected_security_id_override" id="selected_security_id_override" value="">
             <br>
             <div>
                 <button type="submit" name="time_period" value="25_years">Get 25 Years of History</button>
@@ -82,13 +85,10 @@
             const progressBarElement = document.getElementById('progress-bar');
             const statusLogElement = document.getElementById('status-log');
 
-            function formatLog(logArray) {
-                return logArray.join('\n'); // Use '\n' for preformatted text
-            }
-
-            function updateStatusDisplay(status) {
+            // Store the original updateStatusDisplay function
+            const originalUpdateStatusDisplay = function(status) {
                 if (!status) {
-                    console.warn("updateStatusDisplay called with null or undefined status.");
+                    console.warn("originalUpdateStatusDisplay called with null or undefined status.");
                     return;
                 }
                 statusMessageElement.textContent = status.message || 'N/A';
@@ -110,89 +110,32 @@
                 }
 
                 if (status.log && Array.isArray(status.log)) {
-                    statusLogElement.textContent = formatLog(status.log);
+                    statusLogElement.textContent = (status.log || []).join('\n');
                     statusLogElement.scrollTop = statusLogElement.scrollHeight; // Auto-scroll to bottom
                 } else {
                     statusLogElement.textContent = 'No log entries.';
                 }
-            }
+            };
 
             // Initialize EventSource
             const eventSourceUrl = "{{ url_for('import_status_stream') }}";
             const evtSource = new EventSource(eventSourceUrl);
 
-            evtSource.onmessage = function(event) {
-                // console.log("SSE message received:", event.data);
-                try {
-                    const status = JSON.parse(event.data);
-                    updateStatusDisplay(status);
-                } catch (e) {
-                    console.error("Error parsing SSE data:", e, "Data:", event.data);
-                    // Optionally display a parsing error to the user if it becomes common
-                }
-            };
-
-            evtSource.onerror = function(err) {
-                console.error("EventSource failed:", err);
-                statusMessageElement.textContent = 'Error connecting to status stream. Please refresh.';
-                // Optionally, you might want to try to reconnect or close the EventSource
-                // For simplicity, we'll just log the error and update status.
-                // EventSource itself attempts to reconnect automatically by default.
-                // If re-connection is not desired on certain errors, evtSource.close() can be called.
-            };
-
-            // To ensure the very initial state is displayed (especially if no import is running),
-            // we can make one call to the old status endpoint.
-            // The SSE stream will send the current state upon connection if it has changed recently,
-            // but if it hasn't changed (e.g. server just started, no import run yet),
-            // the SSE stream might not send an initial message immediately until a change or keep-alive.
-            fetch("{{ url_for('get_import_status') }}")
-                .then(response => response.json())
-                .then(status => {
-                    updateStatusDisplay(status);
-                })
-                .catch(error => {
-                    console.error('Error fetching initial import status:', error);
-                });
-
-            // --- Custom logic for dropdown manipulation ---
-            let removedOptionData = null; // To store { value, text, originalIndex } of the removed option
+            // --- Custom logic for dropdown manipulation and status tracking ---
+            let removedOptionData = null; // To store { value, text, originalIndex, timePeriod }
             const importForm = document.querySelector('form[action="{{ url_for('import_yahoo_finance') }}"]');
             const securitySelectElement = document.getElementById('security_id');
+            const hiddenSecurityIdOverrideElement = document.getElementById('selected_security_id_override');
+            let currentImportStatus = {}; // To store the latest status from SSE
 
-            if (importForm && securitySelectElement) {
-                importForm.addEventListener('submit', function(event) {
-                    // Check if an import is already considered "running" by the server status via SSE
-                    // This is a client-side check to prevent removing an option if the server might reject the new import
-                    if (statusMessageElement.textContent === 'Import process started...' || progressBarElement.style.backgroundColor === 'rgb(33, 150, 243)') { // Blue (in-progress)
-                        // Do not remove if an import is visually indicated as active from SSE
-                        // The server will flash a message "An import process is already running."
-                        console.warn("Client-side: Import appears to be running based on SSE status. Not removing option yet.");
-                        return;
-                    }
+            // Global updateStatusDisplay function that wraps the original and adds our logic
+            window.updateStatusDisplay = function(newStatus) { // Assign to window to ensure it's globally accessible if needed, and clearly define it
+                currentImportStatus = newStatus; // Update global status tracker
+                originalUpdateStatusDisplay(newStatus); // Call the original display logic
 
-                    const selectedOption = securitySelectElement.options[securitySelectElement.selectedIndex];
-                    if (selectedOption && selectedOption.value) {
-                        // Store details of the selected option
-                        removedOptionData = {
-                            value: selectedOption.value,
-                            text: selectedOption.text,
-                            originalIndex: securitySelectElement.selectedIndex // Store original index
-                        };
-                        // Remove the option from the dropdown
-                        securitySelectElement.remove(securitySelectElement.selectedIndex);
-                        console.log("Removed option:", removedOptionData);
-                    }
-                });
-            }
-
-            // Modify updateStatusDisplay to handle re-adding the option on failure
-            const originalUpdateStatusDisplay = updateStatusDisplay;
-            updateStatusDisplay = function(status) {
-                originalUpdateStatusDisplay(status); // Call the original function first
-
+                // Now handle logic based on removedOptionData and the newStatus
                 if (removedOptionData) { // If an option was removed by this client
-                    if (status.error && !status.running) { // Import failed
+                    if (newStatus.error && !newStatus.running) { // Import failed
                         console.log("Import failed. Re-adding option:", removedOptionData);
                         const option = new Option(removedOptionData.text, removedOptionData.value);
                         // Attempt to re-insert at original position, otherwise append
@@ -202,11 +145,91 @@
                             securitySelectElement.add(option);
                         }
                         removedOptionData = null; // Clear stored data
-                    } else if (!status.running && !status.error && status.progress === 100) { // Import successful
-                        console.log("Import successful. Option remains removed:", removedOptionData);
-                        removedOptionData = null; // Clear stored data, it's successfully processed
+                    } else if (!newStatus.running && !newStatus.error && newStatus.progress === 100) { // Import successful
+                        console.log("Import successful. Option processing for:", removedOptionData);
+                        if (removedOptionData.timePeriod === '25_years') {
+                            // Find the option in the select list, it might have been re-added if the page refreshed
+                            // or it might need to be re-added if it was just removed client-side.
+                            let optionToDisable = Array.from(securitySelectElement.options).find(opt => opt.value === removedOptionData.value);
+
+                            if (!optionToDisable) { // If it was removed and not re-added by a refresh
+                                optionToDisable = new Option(removedOptionData.text, removedOptionData.value);
+                                // Attempt to re-insert at original position, otherwise append
+                                if (removedOptionData.originalIndex !== undefined && removedOptionData.originalIndex < securitySelectElement.options.length) {
+                                    securitySelectElement.add(optionToDisable, securitySelectElement.options[removedOptionData.originalIndex]);
+                                } else {
+                                    securitySelectElement.add(optionToDisable);
+                                }
+                                console.log("Re-added option to disable it:", removedOptionData.value);
+                            }
+
+                            optionToDisable.disabled = true;
+                            optionToDisable.textContent = removedOptionData.text + " (History Loaded)";
+                            console.log("Disabled option and updated text:", removedOptionData.value);
+                        }
+                        removedOptionData = null;
                     }
                 }
+            };
+            // End of updateStatusDisplay override
+
+            evtSource.onmessage = function(event) {
+                try {
+                    const status = JSON.parse(event.data);
+                    window.updateStatusDisplay(status); // Call our overridden version
+                } catch (e) {
+                    console.error("Error parsing SSE data:", e, "Data:", event.data);
+                }
+            };
+
+            evtSource.onerror = function(err) {
+                console.error("EventSource failed:", err);
+                statusMessageElement.textContent = 'Error connecting to status stream. Please refresh.';
+            };
+
+            fetch("{{ url_for('get_import_status') }}")
+                .then(response => response.json())
+                .then(status => {
+                    window.updateStatusDisplay(status); // Call our overridden version
+                })
+                .catch(error => {
+                    console.error('Error fetching initial import status:', error);
+                });
+
+            if (importForm && securitySelectElement && hiddenSecurityIdOverrideElement) {
+                importForm.addEventListener('submit', function(event) {
+                    const selectedOption = securitySelectElement.options[securitySelectElement.selectedIndex];
+
+                    if (selectedOption && selectedOption.value) {
+                        // 1. ALWAYS set the override ID with the currently selected option's value.
+                        hiddenSecurityIdOverrideElement.value = selectedOption.value;
+                        console.log("Override security ID set to:", hiddenSecurityIdOverrideElement.value);
+
+                        // 2. Check if an import is already running based on the latest known status from currentImportStatus.
+                        if (currentImportStatus && currentImportStatus.running) {
+                            console.warn("Client-side: Import appears to be running based on current SSE status. Option will not be removed by client.");
+                            return;
+                        }
+
+                        // 3. If not running, THEN remove option for immediate UX and store its details.
+                        const buttonPressed = event.submitter;
+                        const timePeriodValue = buttonPressed ? buttonPressed.value : null;
+
+                        removedOptionData = {
+                            value: selectedOption.value,
+                            text: selectedOption.text,
+                            originalIndex: securitySelectElement.selectedIndex,
+                            timePeriod: timePeriodValue
+                        };
+                        securitySelectElement.remove(securitySelectElement.selectedIndex);
+                        console.log("Removed option for import:", removedOptionData);
+
+                    } else {
+                        hiddenSecurityIdOverrideElement.value = "";
+                        console.warn("No valid security selected or selected option has no value.");
+                        // event.preventDefault(); // Consider if submission should be stopped.
+                    }
+                });
             }
             // --- End of custom logic ---
         });

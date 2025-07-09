@@ -68,6 +68,7 @@ class Security(db.Model):
     exchange = db.Column(db.Text)
     currency = db.Column(db.Text)
     daily_prices = db.relationship("DailyPrice", back_populates="security", lazy=True)
+    imported_25yr_data_at = db.Column(db.DateTime, nullable=True) # Stores timestamp of last successful 25yr import
 
     def __repr__(self):
         return f'<Security {self.ticker}>'
@@ -403,6 +404,10 @@ def _import_yahoo_finance_task(app_context, security_id_task, time_period_task):
                 if processed_rows % (total_rows // 10 if total_rows > 10 else 1) == 0 or processed_rows == total_rows: # Update status periodically
                      _update_import_status(f"Importing data for {ticker_symbol}: {processed_rows}/{total_rows} rows.", "Importing", progress, log_msg=f"Processed {processed_rows}/{total_rows} for {ticker_symbol}.")
 
+            # If it was a 25-year import and successful up to this point, mark it.
+            if time_period_task == '25_years':
+                security.imported_25yr_data_at = datetime.utcnow()
+                _update_import_status(f"Marking {ticker_symbol} as having 25yr history loaded.", "Updating Status", 99, log_msg=f"Marking {ticker_symbol} with 25yr history timestamp.")
 
             db.session.commit()
             _update_import_status(f"Successfully imported data for {ticker_symbol}.", "Completed", 100, log_msg=f"Import complete for {ticker_symbol}.", running_flag=False)
@@ -437,11 +442,15 @@ def import_yahoo_finance():
             'last_updated': time.time()
         })
 
-    security_id = request.form.get('security_id')
+    # Prioritize the override field, then fall back to the original select field's name.
+    security_id_override = request.form.get('selected_security_id_override')
+    security_id_from_select = request.form.get('security_id')
+
+    security_id_to_use = security_id_override if security_id_override else security_id_from_select
     time_period = request.form.get('time_period') # This is the button value
 
-    if not security_id:
-        _update_import_status("Error: No security selected.", "Error", 0, error_flag=True, log_msg="No security_id provided.", running_flag=False)
+    if not security_id_to_use:
+        _update_import_status("Error: No security selected.", "Error", 0, error_flag=True, log_msg="No security_id (override or direct) provided.", running_flag=False)
         flash('Please select a security.', 'error') # Flash for immediate feedback on redirect
         return redirect(url_for('admin')) # Redirect because the task won't even start
 
@@ -449,7 +458,7 @@ def import_yahoo_finance():
     # This is crucial for database operations and using app config in the thread
     thread_app_context = app.app_context()
 
-    thread = threading.Thread(target=_import_yahoo_finance_task, args=(thread_app_context, security_id, time_period))
+    thread = threading.Thread(target=_import_yahoo_finance_task, args=(thread_app_context, security_id_to_use, time_period))
     thread.daemon = True # Allows main program to exit even if threads are still running
     thread.start()
 
