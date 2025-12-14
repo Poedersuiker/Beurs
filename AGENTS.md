@@ -1,6 +1,6 @@
-# Beurs Application
+# Market Research Application
 
-This is a Flask application with websockets and a MariaDB backend.
+This is a Flask application that automates stock market research using Google Gemini and DuckDuckGo.
 
 ## Setup
 
@@ -20,20 +20,17 @@ This is a Flask application with websockets and a MariaDB backend.
       ```bash
       cp config.py.example config.py
       ```
-    - Edit `config.py` with your database credentials.
+    - Edit `config.py`.
+    - **Important:** Set `GOOGLE_API_KEY` in `config.py` or your environment variables to enable Gemini analysis.
 
 4.  **Set up the database:**
-    - Create a `.flaskenv` file with the following content:
+    - Create a `.flaskenv` file:
       ```
       FLASK_APP=run.py
       ```
-    - Initialize the database migrations (only the first time):
+    - Initialize the database migrations (if not already done):
       ```bash
       flask db init
-      ```
-    - Create an initial migration:
-      ```bash
-      flask db migrate -m "Initial migration."
       ```
     - Apply the migrations to the database:
       ```bash
@@ -45,5 +42,15 @@ This is a Flask application with websockets and a MariaDB backend.
 To run the application, use the following command:
 
 ```bash
+flask run
+```
+or
+```bash
 python run.py
 ```
+
+## Features
+
+- **Deep Research:** Enter a stock symbol (e.g., AAPL) to fetch news from the last 48 hours.
+- **AI Predictions:** Gemini predicts movement (Rise/Fall) for Day, Week, Month, and Quarter.
+- **Storage:** Predictions and sources are stored in the database.

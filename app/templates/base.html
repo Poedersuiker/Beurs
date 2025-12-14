@@ -3,20 +3,40 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <title>Beurs</title>
+    <title>Market Researcher</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .flash-messages {
+            padding: 10px;
+            margin-bottom: 20px;
+            background-color: #e0f7fa;
+            border: 1px solid #b2ebf2;
+            color: #006064;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
         <div class="menu">
+            <h3>MarketAI</h3>
             <ul>
-                <li><a href="{{ url_for('main.dashboard') }}">Dashboard</a></li>
+                <li><a href="{{ url_for('main.dashboard') }}">Research & Predictions</a></li>
             </ul>
         </div>
         <div class="content">
+            {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for message in messages %}
+                        <div>{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            {% endwith %}
             {% block content %}{% endblock %}
         </div>
     </div>
+    <!-- SocketIO is not strictly needed for the requested feature, but keeping it for existing structure -->
     <script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
     <script type="text/javascript" charset="utf-8">
         var socket = io();
