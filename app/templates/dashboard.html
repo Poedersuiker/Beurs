@@ -1,6 +1,56 @@
 {% extends "base.html" %}
 
 {% block content %}
-    <h1>Dashboard</h1>
-    <p>Welcome to the dashboard.</p>
+    <h1>Market Research</h1>
+
+    <div class="research-form" style="margin-bottom: 30px; padding: 20px; background: #f9f9f9; border-radius: 8px;">
+        <h2>New Analysis</h2>
+        <form action="{{ url_for('main.research') }}" method="post">
+            <div style="display: flex; gap: 10px;">
+                <input type="text" name="symbol" placeholder="Enter Stock Symbol or Market (e.g., AAPL, Bitcoin)" required style="flex-grow: 1; padding: 10px; font-size: 16px;">
+                <button type="submit" style="padding: 10px 20px; font-size: 16px; background-color: #007bff; color: white; border: none; cursor: pointer;">Research</button>
+            </div>
+            <p style="font-size: 0.9em; color: #666; margin-top: 5px;">This will analyze news from the last 48 hours.</p>
+        </form>
+    </div>
+
+    <h2>Recent Predictions</h2>
+
+    {% if predictions %}
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+            <thead>
+                <tr style="background-color: #eee; text-align: left;">
+                    <th style="padding: 10px; border-bottom: 1px solid #ddd;">Date</th>
+                    <th style="padding: 10px; border-bottom: 1px solid #ddd;">Stock</th>
+                    <th style="padding: 10px; border-bottom: 1px solid #ddd;">Timeframe</th>
+                    <th style="padding: 10px; border-bottom: 1px solid #ddd;">Prediction</th>
+                    <th style="padding: 10px; border-bottom: 1px solid #ddd;">Emotion</th>
+                    <th style="padding: 10px; border-bottom: 1px solid #ddd;">Confidence</th>
+                    <th style="padding: 10px; border-bottom: 1px solid #ddd;">Reasoning</th>
+                    <th style="padding: 10px; border-bottom: 1px solid #ddd;">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pred in predictions %}
+                <tr>
+                    <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ pred.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #ddd;"><strong>{{ pred.stock.symbol }}</strong></td>
+                    <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ pred.time_frame|capitalize }}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #ddd;">
+                        <span style="color: {% if pred.prediction_type == 'Rise' %}green{% elif pred.prediction_type == 'Fall' %}red{% else %}gray{% endif %}; font-weight: bold;">
+                            {{ pred.prediction_type }}
+                        </span>
+                    </td>
+                    <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ pred.emotion }}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ "%.2f"|format(pred.confidence) }}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #ddd; font-size: 0.9em;">{{ pred.reasoning }}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #ddd;">{{ pred.status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>No predictions yet. Start by researching a stock.</p>
+    {% endif %}
+
 {% endblock %}

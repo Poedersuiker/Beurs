@@ -6,3 +6,8 @@ mysql-connector-python
 python-dotenv
 gunicorn
 eventlet
+google-generativeai
+duckduckgo-search
+beautifulsoup4
+requests
+markdown
